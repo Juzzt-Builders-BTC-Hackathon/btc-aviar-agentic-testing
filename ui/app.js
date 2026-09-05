@@ -65,7 +65,7 @@ function renderDetail() {
   let content='';
   if(state.tab==='results') {
     const s=r.summary,u=s.usage;
-    content=`<div class="summary-line"><span><strong>${r.results.length}</strong> recorded scenarios</span>${s.total!==undefined?`<span><strong>${s.pass_rate}%</strong> pass rate</span><span><strong>${s.duration_seconds}s</strong> duration</span>`:''}${u?`<span><strong>${u.calls}</strong> OpenAI calls</span><span><strong>${u.input_tokens+u.output_tokens}</strong> tokens</span><span>Cost: <strong>${u.estimated_cost_usd===null?'not configured':`$${u.estimated_cost_usd.toFixed(4)}`}</strong></span>`:''}</div>`;
+    content=`<div class="summary-line"><span><strong>${r.results.length}</strong> recorded scenarios</span>${s.total!==undefined?`<span><strong>${s.pass_rate}%</strong> pass rate</span><span><strong>${s.duration_seconds}s</strong> duration</span>`:''}${u?`<span><strong>${u.calls}</strong> OpenAI calls</span><span><strong>${u.input_tokens+u.output_tokens}</strong> tokens</span> <!--<span>Cost: <strong>${u.estimated_cost_usd===null?'not configured':`$${u.estimated_cost_usd.toFixed(4)}`}</strong></span> -->`:''}</div>`;
     if(r.evolution?.previous_run)content+=`<div class="gap-item">${r.evolution.reused.length} reused scenarios · ${r.evolution.added.length} additions · ${(r.evolution.outcomes||[]).filter(c=>c.change==='regression').length} regressions. See Changes & repairs.</div>`;
     content+=r.results.length?r.results.map(r=>resultHTML(r)+diagnosticHTML(r)).join(''):`<div class="detail-empty">${terminal(r.status)?'No execution results. Inspect the decision log and partial artifacts.':'Preparing browser evidence. Results appear as each scenario finishes.'}</div>`;
   } else if(state.tab==='plan') {
