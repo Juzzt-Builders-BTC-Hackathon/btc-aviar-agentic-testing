@@ -23,7 +23,8 @@ SNAPSHOT = r"""() => {
      selector='body > '+parts.join(' > ');
    }
    return {selector, tag:e.tagName.toLowerCase(), text:(e.innerText || attr('aria-label') || attr('placeholder')).trim().slice(0,160),
-     name:attr('name'), type:attr('type'), testid:attr('data-testid') || attr('data-test'), role:attr('role'), href:attr('href')};
+     name:attr('name'), type:attr('type'), testid:attr('data-testid') || attr('data-test'), role:attr('role'), href:attr('href'),
+     options:e.tagName==='SELECT'?[...e.options].slice(0,100).map(o=>({label:o.label,value:o.value})):[]};
  });
  return {url:location.href, title:document.title, text:document.body.innerText.slice(0,7000), elements,
    iframe_count:document.querySelectorAll('iframe').length, password_fields:document.querySelectorAll('input[type="password"]').length,
@@ -95,15 +96,18 @@ async def auth_state(browser, base):
 
 
 async def crawl(browser, request, state, event):
+    import re
+    from .evolution import canonical_url
     context = await new_context(browser, request.url, state=state, resource_policy=request.resource_policy, navigation_origins=request.navigation_origins)
-    pages, queue, seen = [], [request.url], set()
+    seeds = re.findall(r'https?://[^\s)<>]+', request.prd_content + '\n' + request.requirements)
+    pages, queue, seen = [], list(dict.fromkeys([request.url] + seeds)), set()
     failures = []
     try:
         page = await context.new_page()
         while queue and len(pages) < request.max_pages:
             url = queue.pop(0).split("#")[0]
-            if url in seen: continue
-            seen.add(url)
+            if canonical_url(url) in seen: continue
+            seen.add(canonical_url(url))
             try:
                 target_url(request.url, url, request.navigation_origins)
                 context.qa_network_log.clear()
@@ -113,6 +117,10 @@ async def crawl(browser, request, state, event):
                 except Exception: pass
                 await page.wait_for_timeout(800)
                 data = await snapshot(page)
+                final_url = canonical_url(data['url'].split('#')[0])
+                seen.add(final_url)
+                if any(canonical_url(p['url'].split('#')[0]) == final_url for p in pages):
+                    continue
                 data["http_status"] = response.status if response else None
                 data["network_warnings"] = list(context.qa_network_log)
                 data["limitations"] = []
@@ -123,7 +131,7 @@ async def crawl(browser, request, state, event):
                 for link in data["links"]:
                     try:
                         candidate = target_url(request.url, link, request.navigation_origins).split("#")[0]
-                        if candidate not in seen and candidate not in queue: queue.append(candidate)
+                        if canonical_url(candidate) not in seen and candidate not in queue: queue.append(candidate)
                     except ValueError: pass
             except Exception as exc:
                 failure = f"{type(exc).__name__}: {redact(str(exc))[:600]}"
@@ -164,6 +172,16 @@ async def execute_flow(browser, request, flow, state, folder=None, attempt="run"
                 if step.action == "fill":
                     if await locator.get_attribute("type") == "password": raise PolicyError("Use the configured authenticated session for passwords")
                     await locator.fill(step.value)
+                elif step.action == "select_option":
+                    options = await locator.locator('option').evaluate_all('(nodes) => nodes.map(n => ({value:n.value,label:n.label}))')
+                    if any(o['value'] == step.value for o in options):
+                        await locator.select_option(value=step.value)
+                    else:
+                        await locator.select_option(label=step.value)
+                elif step.action == "assert_invalid":
+                    valid = await locator.evaluate('(e) => e.validity ? e.validity.valid : null')
+                    if valid is None: raise ValueError('assert_invalid requires a form input or select')
+                    if valid: raise AssertionError('Expected native form validity to be invalid')
                 elif step.action == "click":
                     check_action(step, request.allow_interactions, await locator.inner_text())
                     await locator.click()
@@ -184,7 +202,7 @@ async def execute_flow(browser, request, flow, state, folder=None, attempt="run"
             error=redact(str(exc))[:1800])
         try: result["failure_snapshot"] = await snapshot(page)
         except Exception: pass
-        if missing and attempt == "validation" and index > 0 and flow.steps[index-1].action == "assert_text":
+        if missing and index > 0 and flow.steps[index-1].action == "assert_text":
             try:
                 result["scoped_regeneration"] = await scope_ambiguous_selector(page, flow.steps[index].target, flow.steps[index-1].target)
             except Exception: pass

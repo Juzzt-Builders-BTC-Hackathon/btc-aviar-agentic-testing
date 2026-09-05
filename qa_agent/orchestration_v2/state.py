@@ -35,6 +35,8 @@ class V2PipelineState(TypedDict, total=False):
     cancellation_requested: bool
     cleanup_completed: bool
     fatal_error: bool
+    quarantined_flow_ids: list[str]
+    schema_version: int
 
 
 def initial_state(run_id, request):
@@ -45,4 +47,5 @@ def initial_state(run_id, request):
         healer_actions=[], final_evaluation=None, evolution_output=None, report_output=None,
         planning_attempts=0, generation_attempts=0, final_replan_attempts=0,
         logical_llm_calls=0, token_usage={}, events=[], errors=[], degraded_components=[],
-        exhausted_limits=[], cancellation_requested=False, cleanup_completed=False, fatal_error=False)
+        exhausted_limits=[], cancellation_requested=False, cleanup_completed=False, fatal_error=False,
+        quarantined_flow_ids=[], schema_version=2)

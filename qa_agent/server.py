@@ -74,8 +74,10 @@ async def readiness():
 
 @app.get("/api/config")
 async def settings():
+    from .orchestration_v2.policies import MAX_LLM_CALLS
     return {"openai_configured": bool(os.getenv("OPENAI_API_KEY")), "model": config.MODEL,
         "pipeline_version": config.PIPELINE_VERSION,
+        'max_llm_calls':MAX_LLM_CALLS if config.PIPELINE_VERSION == 'v2' else 5,
         "allowed_origins": sorted(config.ALLOWED), "allow_all_origins": "*" in config.ALLOWED, "demo_url": config.DEMO_ORIGIN + "/demo/",
         "auth_configured": bool(os.getenv("TARGET_PASSWORD") or os.getenv("QA_STORAGE_STATE")),
         "auth_origin": os.getenv("TARGET_AUTH_ORIGIN", ""), "max_active_runs": 1,
@@ -121,6 +123,7 @@ async def create_run(request: RunRequest):
         diagnostic = error_details(exc, "run_directory")
         raise HTTPException(503, f"{diagnostic['code']}: {diagnostic['message']} {diagnostic['remedy']}") from exc
     task = asyncio.create_task(run_pipeline(store, rid))
+    store.update(rid,summary={'pipeline_version':config.PIPELINE_VERSION})
     tasks[rid] = task
     task.add_done_callback(lambda done: tasks.pop(rid, None))
     return store.get(rid)
@@ -135,7 +138,28 @@ async def detail(rid: str):
         validation=store.read(rid, "validation_report.json", []),
         defects=store.read(rid, "defect_report.json", []), evolution=store.read(rid, "suite_evolution.json", {}))
     run["artifacts"] = sorted(p.name for p in (store.root / rid).iterdir() if p.is_file() and not p.name.endswith(".tmp"))
+    run['agent_health'] = store.read(rid,'agent_health.json',{})
+    run['live_usage'] = store.read(rid,'llm_usage.json',{})
+    run['narrative'] = store.read(rid,'agent_narrative.json',{})
+    run['resume'] = {'allowed':False}
+    if run['status'] in {'interrupted','cancelled','failed'} and store.read(rid,'pipeline_metadata.json',{}).get('schema_version') == 2:
+        from .orchestration_v2.runner import resume_status
+        run['resume'] = await resume_status(store,rid)
     return run
+
+
+@app.post('/api/runs/{rid}/resume',status_code=202)
+async def resume_run(rid: str):
+    find_run(rid)
+    if any(not task.done() for task in tasks.values()): raise HTTPException(409,'Another run is active')
+    from .orchestration_v2.runner import resume_status, run_pipeline_v2
+    info = await resume_status(store,rid)
+    if not info['allowed']: raise HTTPException(409,info['reason'])
+    store.update(rid,status='queued')
+    task = asyncio.create_task(run_pipeline_v2(store,rid,resume=True))
+    tasks[rid] = task
+    task.add_done_callback(lambda done:tasks.pop(rid,None))
+    return store.get(rid)
 
 
 @app.post("/api/runs/{rid}/cancel")

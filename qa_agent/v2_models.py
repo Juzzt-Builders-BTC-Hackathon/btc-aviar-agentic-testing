@@ -26,13 +26,20 @@ class PRDAnalysis(V2Model):
     unresolved_statements: list[str] = Field(default_factory=list, max_length=50)
 
 
+class RequirementTrace(V2Model):
+    requirement_id: str
+    flow_ids: list[str] = Field(default_factory=list)
+    status: Literal["covered", "partial", "uncovered"] = "uncovered"
+    rationale: str = ""
+
+
 class EvaluationResult(V2Model):
     evaluation_stage: Literal["PLAN_EVALUATION", "GENERATION_EVALUATION", "FINAL_EVALUATION"]
     decision: Literal["APPROVE", "REPLAN", "REGENERATE", "INVALID", "REPORT"]
     gaps: list[str] = Field(default_factory=list, max_length=50)
     invalid_items: list[str] = Field(default_factory=list, max_length=50)
     untested_risks: list[str] = Field(default_factory=list, max_length=50)
-    requirement_traceability: list[dict[str, Any]] = Field(default_factory=list)
+    requirement_traceability: list[RequirementTrace] = Field(default_factory=list)
     rationale: str = Field(default="", max_length=3000)
     confidence: float = Field(default=0.5, ge=0, le=1)
     reason_type: Literal["none", "coverage_gap", "generation_gap", "defect", "environment", "policy"] = "none"

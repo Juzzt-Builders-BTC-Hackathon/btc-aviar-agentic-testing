@@ -28,6 +28,33 @@ the same API, UI, browser safety controls, artifacts, SQLite run store and suite
 evolution behavior as V1; its graph checkpoints are stored separately in
 `data/langgraph-v2.sqlite3`.
 
+The [V2 repair record](QPILOT_V2_REPAIR_PLAN.md) maps the 23 audited issues to repairs
+and verification. V2 publishes stage starts and per-test results, preserves agent
+fallback diagnostics, and excludes rejected tests from execution. Dropdowns use
+`select_option`; native invalid-input checks use `assert_invalid`. Passing smoke
+tests do not establish coverage of all PRD acceptance criteria.
+
+V2 reserves calls for final evaluation and reporting within `QA_V2_MAX_LLM_CALLS`
+(default 8). The Configuration panel displays the actual budget. SDK retries may
+make more HTTP attempts than this logical-call count.
+
+After an interruption, **Resume run** appears only if a compatible checkpoint is
+at a safe non-browser boundary and its original ten-minute deadline is still valid.
+Resume preserves consumed calls and tokens. Unknown in-flight browser actions cannot
+be resumed; use **Run again** after restoring known test preconditions. The API is
+`POST /api/runs/{id}/resume`; restarting the server does not automatically replay jobs.
+
+Verification commands (the live checks use the configured API key):
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
+.\.venv\Scripts\python.exe scripts/verify_v2_llm.py
+.\.venv\Scripts\python.exe scripts/verify_v2_local_ai.py
+```
+
+The last command uses a temporary local page with known fixture requirements. An
+external-site rerun using `scripts/verify_v2_run.py` requires permission to test that target.
+
 ## Run locally
 
 Prerequisites: **Python 3.12** and Chromium installed through Playwright. OpenAI mode needs your own API key and network access. Baseline needs no model key. Windows is the verified environment; Linux/macOS instructions are supplied but were not acceptance-tested here.

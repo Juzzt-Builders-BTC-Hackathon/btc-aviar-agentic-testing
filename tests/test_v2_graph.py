@@ -37,3 +37,27 @@ def test_happy_path_visits_expected_nodes_in_order():
     assert runtime.visited == ["initialize", "reconnaissance", "load_evolution", "prd_analyst",
                                "planner", "plan_evaluator", "generator", "validator",
                                "generation_evaluator", "executor", "final_evaluator", "evolution", "reporter"]
+
+
+def test_report_failure_retries_then_calls_failure_handler():
+    class BrokenReporter(FakeRuntime):
+        calls = 0
+        async def report(self,state):
+            self.calls += 1
+            raise OSError('report write failed')
+    runtime = BrokenReporter()
+    result = asyncio.run(build_graph(runtime).ainvoke(initial_state('failure',{})))
+    assert result['pipeline_status'] == 'failed'
+    assert runtime.calls == 2 and runtime.visited[-1] == 'fail'
+
+
+def test_transient_report_failure_recovers():
+    class ReporterRetry(FakeRuntime):
+        calls = 0
+        async def report(self,state):
+            self.calls += 1
+            if self.calls == 1: raise OSError('transient')
+            return await super().report(state)
+    runtime = ReporterRetry()
+    result = asyncio.run(build_graph(runtime).ainvoke(initial_state('retry',{})))
+    assert result['pipeline_status'] == 'completed' and runtime.calls == 2

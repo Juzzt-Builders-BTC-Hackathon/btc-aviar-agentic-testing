@@ -41,7 +41,7 @@ The repository's docs/REPORT_GUIDE.md provides the complete artifact dictionary.
 '''
 
 
-def reports(store, rid, request, plan, results, gaps, heals, requirements, usage):
+def reports(store, rid, request, plan, results, gaps, heals, requirements, usage, narrative=None, agent_health=None):
     total = len(results)
     passed = sum(r["status"] == "passed" for r in results)
     summary = {"total": total, "passed": passed, "failed": sum(r["status"] == "failed" for r in results),
@@ -69,6 +69,11 @@ def reports(store, rid, request, plan, results, gaps, heals, requirements, usage
         lines.extend(["", f"### {defect['name']}", json.dumps(defect, indent=2, ensure_ascii=False)])
     lines.extend(["", "## Suite evolution and observed UI changes", json.dumps(evolution, indent=2, ensure_ascii=False),
                   "DOM/text differences are observations, not pixel-level visual regression or proof of a defect."])
+    if narrative is not None:
+        lines.extend(['', '## Reporter narrative', json.dumps(narrative, indent=2, ensure_ascii=False)])
+    if agent_health is not None:
+        lines.extend(['', '## Agent health and fallback reasons', json.dumps(agent_health, indent=2, ensure_ascii=False),
+                      'Fallback reviews and confidence scores do not establish full requirement coverage.'])
     markdown = "\n".join(lines)
     store.artifact(rid, "report.md", markdown)
     store.artifact(rid, "report.html", '<!doctype html><html><meta charset="utf-8"><title>QA report</title><body><pre style="white-space:pre-wrap;font:15px/1.7 system-ui;max-width:1000px;margin:40px auto">' + html.escape(markdown) + '</pre></body></html>')

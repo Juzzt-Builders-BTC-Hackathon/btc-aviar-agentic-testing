@@ -8,7 +8,8 @@ def envelope(decision):
 
 def test_evaluation_routes_are_bounded():
     assert after_plan_evaluation({"plan_evaluation": envelope("REPLAN"), "planning_attempts": 1}) == "planner"
-    assert after_plan_evaluation({"plan_evaluation": envelope("REPLAN"), "planning_attempts": 2}) == "generator"
+    assert after_plan_evaluation({"plan_evaluation": envelope("REPLAN"), "planning_attempts": 2}) == "reject_plan"
+    assert after_generation_evaluation({'generation_evaluation':envelope('REGENERATE'),'generation_attempts':2}) == 'quarantine'
     assert after_generation_evaluation({"generation_evaluation": envelope("REGENERATE"), "generation_attempts": 1}) == "generator"
     assert after_generation_evaluation({"generation_evaluation": envelope("APPROVE")}) == "executor"
     assert after_final_evaluation({"final_evaluation": envelope("REPORT")}) == "evolution"

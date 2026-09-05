@@ -69,7 +69,7 @@ def redact(value):
 
 
 def check_action(step, allow_interactions, visible_text=""):
-    if step.action in {"click", "fill"} and not allow_interactions:
+    if step.action in {"click", "fill", "select_option"} and not allow_interactions:
         raise PolicyError("Form interactions are disabled for this run")
     if step.action == "click" and re.search(r"\b(delete|remove|pay|purchase|charge|transfer|send|finish|place order|complete order)\b", f"{step.intent} {step.target} {visible_text}", re.I):
         raise PolicyError("Transaction/destructive action blocked; use a dedicated test harness for this flow")

@@ -11,7 +11,7 @@ def after_plan_evaluation(state):
     decision = (state.get("plan_evaluation") or {}).get("data", {}).get("decision")
     if decision == "REPLAN" and state.get("planning_attempts", 0) < MAX_PLAN_ATTEMPTS:
         return "planner"
-    return "generator" if decision in {"APPROVE", "REPLAN"} else "fail"
+    return 'generator' if decision == 'APPROVE' else 'reject_plan'
 
 
 def after_generation_evaluation(state):
@@ -20,7 +20,7 @@ def after_generation_evaluation(state):
     decision = (state.get("generation_evaluation") or {}).get("data", {}).get("decision")
     if decision == "REGENERATE" and state.get("generation_attempts", 0) < MAX_GENERATION_ATTEMPTS:
         return "generator"
-    return "executor" if decision in {"APPROVE", "REGENERATE"} else "fail"
+    return 'executor' if decision == 'APPROVE' else 'quarantine'
 
 
 def after_execution(state):

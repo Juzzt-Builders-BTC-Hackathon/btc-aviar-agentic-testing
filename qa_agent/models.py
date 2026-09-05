@@ -37,7 +37,7 @@ class RunRequest(StrictModel):
 
 
 class Step(StrictModel):
-    action: Literal["navigate", "fill", "click", "assert_visible", "assert_text", "assert_url"]
+    action: Literal["navigate", "fill", "select_option", "click", "assert_visible", "assert_text", "assert_url", "assert_invalid"]
     target: str = Field(max_length=2000)
     value: str = Field(max_length=2000)
     intent: str = Field(min_length=1, max_length=500)

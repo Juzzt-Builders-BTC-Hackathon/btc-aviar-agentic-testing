@@ -2,6 +2,45 @@
 from .healing import classify
 
 
+def enrich_classification(classification, original):
+    if original.get('failure_kind') == 'execution' and classification['label'] == 'needs_review':
+        script_error = any(text in original.get('error','') for text in ('Element is not an', 'requires select', 'Unknown engine'))
+        classification = {'label':'needs_review' if script_error else 'environment_issue', 'confidence':.5,
+            'rationale':'Invalid browser action; repair the test script.' if script_error else
+                        'Browser execution failed; inspect timing, connectivity and application availability.'}
+        if script_error: classification['issue_type'] = 'test_script_issue'
+    classification.setdefault('issue_type', {'healed_ok':'test_script_issue','likely_defect':'application_defect_suspected',
+        'flaky_test':'intermittent_failure','environment_issue':'execution_environment','blocked':'policy_block',
+        'generation_failed':'test_script_issue','passed':'none'}.get(classification['label'],'undetermined'))
+    classification['next_action'] = {'healed_ok':'Reuse the verified locator; retain original evidence.',
+        'likely_defect':'Review the requirement and reproductions with the application owner.',
+        'flaky_test':'Investigate timing; retain the original failure.', 'passed':'No action required for these assertions.',
+        'blocked':'Review permissions and untested risk.', 'generation_failed':'Repair the test before executing it.'
+        }.get(classification['label'],'Inspect the failed step and evidence; do not rewrite business expectations.')
+    return classification
+
+
+def finalize_result(flow, validated, original, retry=None, confirmation=None):
+    """Common evidence semantics for the separated V2 Executor and Healer nodes."""
+    healed = bool(confirmation and confirmation.get('status') == 'passed')
+    result = dict(original)
+    if retry: result['retry'] = retry
+    if healed:
+        result.update(status='passed', original_failure=original, healed_attempt=confirmation)
+    if validated.get('status') == 'failed' and original['status'] == 'passed':
+        result = {**validated, 'retry':original}
+        classification = classify(validated, original)
+    elif original['status'] == 'generation_failed':
+        classification = {'label':'generation_failed','confidence':1.0,'rationale':original.get('error','Test not executable')}
+    else:
+        classification = classify(original, retry, healed)
+    result.update(classification=enrich_classification(classification, original),
+        attempts=[a for a in (validated,original,retry,confirmation) if a],
+        original_flow=flow.model_dump(), name=flow.name, risk=flow.risk, oracle=flow.oracle,
+        agent_decisions=[{'node':a.get('attempt','execute'),'reason':a['status']} for a in (validated,original,retry,confirmation) if a])
+    return result
+
+
 async def triage_flow(flow, validated, execute, propose, event):
     original_flow = flow.model_copy(deep=True)
     attempts = [validated]
@@ -64,6 +103,7 @@ async def triage_flow(flow, validated, execute, propose, event):
         "passed": "No action required for these assertions.", "blocked": "Review test permissions and the untested flow."}.get(classification["label"], "Inspect failed step, expected behavior and browser evidence; no automatic assertion rewrite.")
     if classification["label"] in {"likely_defect", "needs_review", "environment_issue"} and not any(t["node"] == "escalate" for t in transitions):
         transition("escalate", classification["next_action"])
+    classification = enrich_classification(classification, original)
     result.update(classification=classification, attempts=attempts, agent_decisions=transitions, original_flow=original_flow.model_dump())
     transition("classify", classification["label"])
     return result, audits
