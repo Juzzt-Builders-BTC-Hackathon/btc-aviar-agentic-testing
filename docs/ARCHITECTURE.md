@@ -3,7 +3,7 @@
 Current enhancement: [Self-healing, persistent suites, PRD uploads and PDF alignment](SELF_HEALING_AND_PDF_ALIGNMENT.md) documents the implemented agent decisions, limits, report fields and verification.
 This document describes the code currently implemented in this repository. Mermaid diagrams render in GitHub and Mermaid-capable Markdown previews.
 
-The reasons for choosing this stack and the conditions that would justify LangGraph, PostgreSQL, React or broader browser-agent tooling are documented in [Technology decisions](TECHNOLOGY_DECISIONS.md).
+The reasons for retaining the V1 stack and adding optional LangGraph orchestration in V2 are documented in [Technology decisions](TECHNOLOGY_DECISIONS.md).
 
 Runtime hardening update: startup now runs filesystem and real browser readiness probes (`runtime.py`); failed readiness blocks job admission. Compatible resource loading permits external assets/read requests, while navigation is constrained to the site, canonical redirects and per-run additional origins. The [feature guide](FEATURES.md) documents these controls and diagnostics in detail.
 
@@ -95,7 +95,7 @@ Versions below are the direct pins in `requirements.txt`, not claims about the n
 | Reports / export | Python `json`, `html`, `xml.etree`, `zipfile` | JSON, escaped HTML, Markdown, JUnit XML and evidence ZIP |
 | Local launch | PowerShell and Python | Windows setup, startup and project-scoped background restart |
 
-There is no React, Node build step, LangGraph, CrewAI, Crawl4AI, browser-use, Redis, PostgreSQL or Docker in the current runtime. Some appear in the original proposal; this implementation uses the smaller stack above. Node was used for JavaScript syntax verification during development, but is not required to run the app.
+There is no React, Node build step, CrewAI, Crawl4AI, browser-use, Redis, PostgreSQL or Docker in the current runtime. V1 keeps the smaller direct pipeline; optional V2 adds LangGraph with a separate SQLite checkpointer. Node was used for JavaScript syntax verification during development, but is not required to run the app.
 
 ## 3. End-to-end run sequence
 

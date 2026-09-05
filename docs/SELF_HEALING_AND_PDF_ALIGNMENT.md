@@ -58,7 +58,7 @@ flowchart TD
     Diff --> Dashboard[Defect Classifier / Changes and repairs / PRD coverage]
 ```
 
-The implementation uses the existing Python/asyncio orchestrator (`pipeline.py`) plus an explicit bounded failure state machine (`triage.py`). It does **not** use LangGraph. Decisions are driven by structured state and browser evidence rather than a cosmetic graph wrapper. This keeps cancellation and browser cleanup within the existing lifetime. SQLite events and per-run artifacts persist decisions and results; resuming halfway through a browser action after a crash is not supported. Interrupted jobs remain interrupted and can be run again.
+V1 uses the existing Python/asyncio orchestrator (`pipeline.py`) plus the bounded failure state machine (`triage.py`). Optional V2 uses LangGraph for stage checkpoints and calls the same browser, safety, triage, reporting and suite-evolution capabilities through adapters. Decisions remain driven by structured state and browser evidence. Browser objects are never checkpointed, and resuming halfway through a browser action is not claimed to be safe.
 
 The Planner's OpenAI adapter continues to use Pydantic structured output parsing with the Responses API. Structured output constrains the response shape; local policy, oracle and locator checks still determine whether a test can execute. See [official structured-output documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
 

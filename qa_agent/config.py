@@ -8,6 +8,9 @@ _data_path = Path(os.getenv("QA_DATA_DIR") or "data")
 DATA = (_data_path if _data_path.is_absolute() else ROOT / _data_path).resolve()
 PORT = int(os.getenv("QA_PORT", "8765"))
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+PIPELINE_VERSION = os.getenv("QA_PIPELINE_VERSION", "v1").strip().lower()
+if PIPELINE_VERSION not in {"v1", "v2"}:
+    raise ValueError("QA_PIPELINE_VERSION must be either 'v1' or 'v2'")
 DEMO_ORIGIN = f"http://127.0.0.1:{PORT}"
 ALLOWED = {x.strip().rstrip("/") for x in os.getenv("QA_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if x.strip()}
 ALLOWED.add(DEMO_ORIGIN)

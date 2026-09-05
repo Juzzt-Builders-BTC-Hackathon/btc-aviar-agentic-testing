@@ -32,7 +32,7 @@ Explain matching by URL/scope/engine/policy, immutable historical snapshots and 
 
 Show Python/FastAPI, OpenAI structured planning, Playwright, SQLite, plain JavaScript and portable evidence exports.
 
-Explain: no LangGraph because the bounded local workflow already has explicit transitions and one browser lifetime. Durable approval pauses or multi-worker orchestration would justify evaluating it. No arbitrary generated code, no automatic business-rule rewriting, no distributed hosting claim.
+Explain: V1 keeps the bounded direct workflow; optional V2 adds LangGraph checkpoints and explicit agent contracts. No arbitrary generated code, no automatic business-rule rewriting, no distributed hosting claim.
 
 ## Slide 6 — Evidence and next steps
 

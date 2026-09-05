@@ -6,7 +6,7 @@ This document describes the implemented stack, not the stack suggested in the or
 
 | Concern | Chosen | Benefit for this project | Cost / alternative |
 |---|---|---|---|
-| Agent coordination | Python/asyncio meta-orchestrator and explicit failure transitions | Direct control of policy, retries, cancellation and browser lifetime | No framework checkpoint engine; consider LangGraph for durable suspended workflows |
+| Agent coordination | V1 direct pipeline; optional V2 LangGraph | Stable default plus V2 stage checkpoints | Both paths must preserve safety and evidence semantics |
 | AI planning | OpenAI Responses API with Pydantic output parsing | User-selected provider and validated action contracts | Network/model dependency, variable plans and token cost |
 | Browser | Playwright with Chromium | One substrate for observations, execution and repair proof | Chromium-only; limited to supported main-document actions |
 | Test generation | Validated action DSL plus Python replay entry point | Model output stays data; expected results can be compared structurally | Less expressive than arbitrary Python/JavaScript tests |
@@ -16,7 +16,11 @@ This document describes the implemented stack, not the stack suggested in the or
 | Classification | Evidence rules with heuristic scores | Auditable reasons and conservative escalation | No trained/calibrated root-cause model |
 | Reports | JSON, HTML, Markdown, PNG, JUnit, ZIP | Human and machine consumption; offline inspection | Evidence can be large and requires access control |
 
-## Why no LangGraph?
+## Why V1 has no LangGraph
+
+This section records the retained V1 decision. V2 is now available behind
+`QA_PIPELINE_VERSION=v2`; it adds explicit agent nodes and SQLite graph checkpoints
+without replacing V1 or relaxing browser safety.
 
 **LangGraph is not used.** The product is agentic because it makes bounded decisions from evidence, not because it imports an agent framework. `pipeline.py` selects reuse, planning, coverage re-plan, execution and reporting. `triage.py` records executor → retry → healer → verification → classifier/escalation transitions. The Planner uses an LLM; the Generator and Healer combine deterministic tools and constrained model assistance. These are specialized runtime roles, not independent chatting processes.
 

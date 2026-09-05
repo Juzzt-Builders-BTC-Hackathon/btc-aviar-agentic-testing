@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import config
 from .models import RunRequest
-from .pipeline import run_pipeline
+from .pipeline_selector import run_pipeline
 from .safety import validate_url, redact
 from .store import Store
 from .runtime import preflight, error_details
@@ -75,6 +75,7 @@ async def readiness():
 @app.get("/api/config")
 async def settings():
     return {"openai_configured": bool(os.getenv("OPENAI_API_KEY")), "model": config.MODEL,
+        "pipeline_version": config.PIPELINE_VERSION,
         "allowed_origins": sorted(config.ALLOWED), "allow_all_origins": "*" in config.ALLOWED, "demo_url": config.DEMO_ORIGIN + "/demo/",
         "auth_configured": bool(os.getenv("TARGET_PASSWORD") or os.getenv("QA_STORAGE_STATE")),
         "auth_origin": os.getenv("TARGET_AUTH_ORIGIN", ""), "max_active_runs": 1,

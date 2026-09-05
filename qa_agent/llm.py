@@ -30,13 +30,14 @@ Do not claim complete application coverage. Keep the plan within the supplied fl
 
 
 class LLM:
-    def __init__(self):
+    def __init__(self, max_calls=5):
         self.calls = 0
+        self.max_calls = max_calls
         self.input_tokens = 0
         self.output_tokens = 0
 
     async def ask(self, schema, system, payload):
-        if self.calls >= 5: raise ValueError("Per-run OpenAI call budget exhausted (5 calls)")
+        if self.calls >= self.max_calls: raise ValueError(f"Per-run OpenAI call budget exhausted ({self.max_calls} calls)")
         if not os.getenv("OPENAI_API_KEY"): raise ValueError("Set OPENAI_API_KEY in .env to use AI planning")
         self.calls += 1
         async with AsyncOpenAI(timeout=60, max_retries=1) as client:

@@ -12,12 +12,21 @@ The focus is maintaining useful tests as a website changes. Repeat runs retain s
 |---|---|
 | [Jury and demo guide](docs/JURY_GUIDE.md) | What to demonstrate in five minutes and how to interpret the results |
 | [Architecture](docs/ARCHITECTURE.md) | Components, orchestration, browser isolation and data flow |
-| [Technology decisions](docs/TECHNOLOGY_DECISIONS.md) | Why this stack, why no LangGraph, examples and trade-offs |
+| [Technology decisions](docs/TECHNOLOGY_DECISIONS.md) | Why V1 stays minimal and how optional V2 uses LangGraph |
 | [Implemented features](docs/FEATURES.md) | What each feature actually does |
 | [PDF alignment and self-healing](docs/SELF_HEALING_AND_PDF_ALIGNMENT.md) | Requirement mapping, reuse rules, repair gates and limitations |
 | [Verification](docs/VERIFICATION.md) | Measured results, reproducible checks and unresolved observations |
 | [Report guide](docs/REPORT_GUIDE.md) | How to read the ZIP, classifications and repair evidence |
 | [Implementation roadmap](docs/IMPLEMENTATION_PLAN.md) | Delivered milestones and future engineering work |
+
+## V2 agent orchestration
+
+The existing pipeline remains the default. Set `QA_PIPELINE_VERSION=v2` to use the
+LangGraph workflow with explicit PRD Analyst, Planner, Evaluator, Generator, Healer,
+and Reporter agents. The Executor and routing policies remain deterministic. V2 uses
+the same API, UI, browser safety controls, artifacts, SQLite run store and suite
+evolution behavior as V1; its graph checkpoints are stored separately in
+`data/langgraph-v2.sqlite3`.
 
 ## Run locally
 
@@ -73,7 +82,7 @@ flowchart LR
     M --> P
 ```
 
-The Python meta-orchestrator chooses transitions from browser evidence and coverage gaps. A repair changes only a uniquely identified failed locator, then replays the complete flow. Ambiguous repairs and changed business expectations are escalated. **LangGraph is not installed**; [Technology decisions](docs/TECHNOLOGY_DECISIONS.md) explains why and when it would become useful.
+The Python meta-orchestrator chooses transitions from browser evidence and coverage gaps. A repair changes only a uniquely identified failed locator, then replays the complete flow. Ambiguous repairs and changed business expectations are escalated. V1 uses the original direct orchestrator; optional V2 uses a checkpointed LangGraph while retaining the same safety rules.
 
 ## Verified behavior
 

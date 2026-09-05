@@ -6,7 +6,7 @@ Generating a test is only part of QA automation. Someone must decide whether cov
 
 **AIVAR automates that coordination for bounded browser tests.** Its strongest demonstration is a repeat run that repairs a locator while retaining the original expected behavior. It also keeps a genuine content difference visible instead of making the test green by rewriting the expectation.
 
-The implemented system is a local, single-user prototype with real OpenAI and Chromium execution. Specialized Planner, Generator and Healer roles are coordinated by explicit Python decisions. LangGraph is not used. See [Technology decisions](TECHNOLOGY_DECISIONS.md) for the rationale.
+The default V1 system is a local, single-user prototype with real OpenAI and Chromium execution and explicit Python coordination. Optional V2 adds a checkpointed LangGraph and explicit PRD Analyst, Evaluator and Reporter agents while preserving deterministic routing and execution. See [Technology decisions](TECHNOLOGY_DECISIONS.md).
 
 ## Prepare before presenting
 
@@ -53,7 +53,7 @@ Because this fixture uses an observed-content oracle rather than an explicit PRD
 
 | Question | Answer grounded in the implementation |
 |---|---|
-| Why is this agentic without LangGraph? | The meta-orchestrator branches on coverage and browser evidence, chooses reuse/extension/retry/repair/escalation and records those choices. A framework is an implementation option, not the definition of agency. |
+| Why is V1 agentic without LangGraph? | The meta-orchestrator branches on coverage and browser evidence, chooses reuse/extension/retry/repair/escalation and records those choices. V2 adds LangGraph for durable workflow state. |
 | Can it hide a regression by healing? | Only the failed locator may change. Assertion values, other steps and scenario meaning are compared and retained. Full replay is required. Semantic matching is still conservative and can escalate. |
 | Does “likely defect” mean a confirmed bug? | No. The same requirement-backed assertion failed twice; a wrong PRD can also cause it. The report asks for confirmation. |
 | What happens when a generated test is wrong? | The current Healer repairs safe locator problems. Unsupported assertions/flows remain `needs_review`; they are not silently rewritten. The live placeholder case is a concrete example. |
