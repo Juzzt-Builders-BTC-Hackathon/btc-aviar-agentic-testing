@@ -1,0 +1,112 @@
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const state = {config:null,runs:[],selected:null,detail:null,tab:'results',nav:'overview',busy:false,open:new Set()};
+const terminal = status => !['queued','running'].includes(status);
+const pill = status => `<span class="pill ${esc(status)}">${esc(status.replaceAll('_',' '))}</span>`;
+const time = value => new Date(value).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+async function api(path, options={}) {
+  const response=await fetch(`/api${path}`,{...options,headers:{'Content-Type':'application/json',...options.headers}});
+  let body; try {body=await response.json();} catch {throw new Error('The local server returned an unreadable response.');}
+  if(!response.ok) throw new Error(typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
+  return body;
+}
+function toast(message) { $('toast').textContent=message;$('toast').classList.remove('hidden');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').classList.add('hidden'),5000); }
+function showError(id,message) {$(id).textContent=message;$(id).classList.toggle('hidden',!message);}
+function openRun(demo=false, request=null) {
+  if(!state.config) return toast('Waiting for local configuration.');
+  $('target-url').value=request?.url || (demo?state.config.demo_url:'https://www.saucedemo.com/inventory.html');
+  $('run-mode').value=request?.mode || (demo || !state.config.openai_configured?'baseline':'openai');
+  $('run-scope').value=request?.scope || '';$('run-requirements').value=request?.requirements || '';
+  $('max-pages').value=request?.max_pages || 5;$('allow-interactions').checked=request?.allow_interactions || false;
+  showError('form-error','');$('run-dialog').showModal();
+}
+function renderRuns() {
+  const query=$('run-search').value.toLowerCase();
+  const runs=state.runs.filter(r=>r.request.url.toLowerCase().includes(query)&&(state.nav!=='reports'||r.status==='completed'));
+  $('run-count').textContent=state.runs.length;$('recent-count').textContent=runs.length;
+  $('empty-runs').classList.toggle('hidden',runs.length>0);
+  $('run-list').innerHTML=runs.map(r=>{
+    const host=new URL(r.request.url).host,s=r.summary;
+    return `<tr><td><div class="run-target"><span class="target-icon">◎</span><button class="run-link" data-run="${r.id}"><strong>${esc(host)}</strong><small>${r.id.slice(0,8)} · ${r.request.mode==='openai'?'OpenAI':'Baseline'}</small></button></div></td><td>${pill(r.status)}</td><td><span class="result-count">${s.total!==undefined?`${s.passed} / ${s.total} passed`:'—'}</span></td><td class="muted">${time(r.created)}</td><td><button class="text-button" data-run="${r.id}" aria-label="Open run ${r.id.slice(0,8)}">↗</button></td></tr>`;
+  }).join('');
+  const complete=state.runs.filter(r=>r.status==='completed');
+  const totals=complete.reduce((a,r)=>({total:a.total+(r.summary.total||0),passed:a.passed+(r.summary.passed||0),healed:a.healed+(r.summary.healed||0),attention:a.attention+(r.summary.failed||0)+(r.summary.blocked||0)}),{total:0,passed:0,healed:0,attention:0});
+  $('metric-total').textContent=state.runs.length;$('metric-rate').textContent=totals.total?`${Math.round(totals.passed/totals.total*100)}%`:'—';
+  $('metric-rate-caption').textContent=totals.total?`${totals.passed} of ${totals.total} scenarios · not coverage`:'No completed scenarios yet';
+  $('metric-heals').textContent=totals.healed;$('metric-attention').textContent=totals.attention;
+}
+function artifactUrl(name) {return `/api/runs/${state.selected}/artifacts/${encodeURIComponent(name)}`;}
+function diagnosticHTML(r) {
+  return r.diagnostics?.length?`<div class="result-item"><span class="pill needs_review">Browser / HTTP warnings · ${esc(r.name)}</span><pre class="code">${esc(JSON.stringify(r.diagnostics,null,2))}</pre></div>`:'';
+}
+function resultHTML(r) {
+  const image=r.healed_attempt?.screenshot||r.screenshot;
+  return `<details class="result-item" data-flow="${esc(r.flow_id)}" ${state.open.has(r.flow_id)?'open':''}><summary class="result-summary"><span class="result-name">${esc(r.name)}</span><span class="result-meta">${pill(r.status)}<span class="muted">${(r.duration_ms/1000).toFixed(1)}s</span></span></summary><p>${esc(r.classification?.rationale || 'Awaiting classification')}</p><p>${esc(r.risk)} risk · ${esc(r.oracle)} expectation · ${esc(r.classification?.label||'pending')} ${r.classification?.confidence?`(${Math.round(r.classification.confidence*100)}% heuristic confidence)`:''}</p>${r.error?`<pre class="code">${esc(r.error)}</pre>`:''}${r.retry?`<p>Unchanged rerun: ${esc(r.retry.status)}. Original outcome retained.</p>`:''}${image?`<a class="evidence-link" href="${artifactUrl(image)}" target="_blank" rel="noopener">Open browser evidence ↗</a><img class="evidence-img" loading="lazy" src="${artifactUrl(image)}" alt="Browser evidence for ${esc(r.name)}">`:''}</details>`;
+}
+function renderDetail() {
+  const r=state.detail;if(!r)return;
+  $('run-detail').classList.remove('hidden');$('detail-id').textContent=`RUN ${r.id.slice(0,8).toUpperCase()} · ${r.status.toUpperCase()}`;
+  $('detail-title').textContent=new URL(r.request.url).host;
+  $('detail-subtitle').textContent=`${r.request.url} · ${r.request.mode==='openai'?'OpenAI planning':'Deterministic baseline'} · ${time(r.created)}`;
+  $('download-run').href=`/api/runs/${r.id}/export`;$('cancel-run').classList.toggle('hidden',terminal(r.status));$('rerun').classList.toggle('hidden',!terminal(r.status));
+  const stages=[['recon','Explore'],['plan','Plan'],['coverage','Coverage'],['generate','Generate'],['validate','Validate'],['execute','Execute'],['heal','Triage / heal'],['report','Report']];
+  const visited=new Set(r.events.map(e=>e.stage));
+  $('pipeline').innerHTML=stages.map(([key,label],i)=>`<div class="pipeline-step ${r.stage===key?'current':visited.has(key)?'done':''}">${visited.has(key)&&r.stage!==key?'✓':`0${i+1}`} ${label}</div>`).join('');
+  showError('run-error',r.summary.error||'');
+  let content='';
+  if(state.tab==='results') {
+    const s=r.summary,u=s.usage;
+    content=`<div class="summary-line"><span><strong>${r.results.length}</strong> recorded scenarios</span>${s.total!==undefined?`<span><strong>${s.pass_rate}%</strong> pass rate</span><span><strong>${s.duration_seconds}s</strong> duration</span>`:''}${u?`<span><strong>${u.calls}</strong> OpenAI calls</span><span><strong>${u.input_tokens+u.output_tokens}</strong> tokens</span><span>Cost: <strong>${u.estimated_cost_usd===null?'not configured':`$${u.estimated_cost_usd.toFixed(4)}`}</strong></span>`:''}</div>`;
+    content+=r.results.length?r.results.map(r=>resultHTML(r)+diagnosticHTML(r)).join(''):`<div class="detail-empty">${terminal(r.status)?'No execution results. Inspect the decision log and partial artifacts.':'Preparing browser evidence. Results appear as each scenario finishes.'}</div>`;
+  } else if(state.tab==='plan') {
+    content=r.plan?`<p class="muted">${esc(r.plan.summary)}</p>${r.plan.flows.map(f=>`<details class="result-item"><summary class="result-summary"><span class="result-name">${esc(f.name)}</span><span class="pill">${esc(f.category)}</span></summary><p>${esc(f.risk)} risk · ${esc(f.oracle)} oracle · Requirements: ${esc(f.requirement_ids.join(', ')||'none linked')}</p><ol class="flow-steps">${f.steps.map(s=>`<li><strong>${esc(s.action)}</strong> — ${esc(s.intent)}<pre class="code">${esc(s.target)}${s.value?` → ${esc(s.value)}`:''}</pre></li>`).join('')}</ol></details>`).join('')}`:'<div class="detail-empty">The planner has not produced a plan yet.</div>';
+  } else if(state.tab==='activity') {
+    content=r.events.map(e=>`<div class="log-row"><span class="log-time">${new Date(e.at).toLocaleTimeString()}</span><span class="log-stage">${esc(e.stage)}</span><span class="log-message">${esc(e.message)}</span></div>`).join('');
+  } else if(state.tab==='coverage') {
+    content=`<p class="muted">Passing tests do not prove full coverage. These gaps and requirement links describe the bounded scope of this run.</p>${r.gaps.map(g=>`<div class="gap-item">${esc(g)}</div>`).join('')}`;
+    if(r.traceability.length) content+=`<h3>Requirements traceability</h3>${r.traceability.map(t=>`<div class="result-item"><strong>${esc(t.id)} — ${esc(t.text)}</strong><p>Planned: ${esc(t.flows.join(', ')||'none')} · Passing: ${esc(t.passing_flows.join(', ')||'none')}</p></div>`).join('')}`;
+    if(r.heals.length) content+=`<h3>Repair audit</h3>${r.heals.map(h=>`<div class="result-item"><strong>${esc(h.flow_id)} · ${h.verified?'Verified':'Unverified'}</strong><p>${esc(h.rationale)}</p><pre class="code">${esc(h.old_selector)} → ${esc(h.new_selector||'no replacement')}</pre></div>`).join('')}`;
+  } else {content=`<div class="artifact-grid">${r.artifacts.map(name=>`<a href="${artifactUrl(name)}" ${name.endsWith('.png')?'target="_blank" rel="noopener"':'download'}>↓ ${esc(name)}</a>`).join('')}</div>`;}
+  $('detail-content').innerHTML=content;
+  $('detail-content').querySelectorAll('details[data-flow]').forEach(d=>d.addEventListener('toggle',()=>{if(d.open)state.open.add(d.dataset.flow);else state.open.delete(d.dataset.flow);}));
+}
+async function selectRun(id,scroll=true) {
+  state.selected=id;state.open.clear();state.detail=await api(`/runs/${id}`);renderDetail();
+  if(scroll)$('run-detail').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function renderConfig() {
+  const c=state.config;
+  $('provider-status').textContent=c.openai_configured?`● OpenAI configured · ${c.model}`:'○ OpenAI key needed · Baseline is available';
+  $('settings-content').innerHTML=`<div class="setting-row"><strong>OpenAI Responses API ${c.openai_configured?'· configured':'· needs a key'}</strong><p>Add OPENAI_API_KEY to .env, then restart the server. Keys stay on the backend.</p><code>OPENAI_MODEL=${esc(c.model)}</code></div><div class="setting-row"><strong>Allowed target origins</strong><p>${c.allow_all_origins?'Any HTTP(S) target is enabled.':'Only the configured target origins are enabled.'} Each browser run stays within its selected target origin.</p><pre class="code">${c.allow_all_origins?'QA_ALLOWED_ORIGINS=* - All target origins':esc(c.allowed_origins.join('\n'))}</pre></div><div class="setting-row"><strong>Authenticated sessions ${c.auth_configured?'· configured':'· not configured'}</strong><p>${esc(c.auth_origin||'Configure TARGET_AUTH_ORIGIN and a local login profile or storage-state file in .env.')}</p><p>Credentials and storage state are never sent to the planner. Run artifacts can contain application content; protect your data directory.</p></div><div class="setting-row"><strong>Execution limits</strong><p>One active run · 12 pages maximum · 12 scenarios maximum · 10-minute deadline · 5 OpenAI calls maximum (each may retry once).</p></div><div class="setting-row"><strong>Local operating boundary</strong><p>This is a single-user loopback application. SSO, distributed workers and remote hosting require the deployment work described in the implementation plan.</p></div>`;
+}
+async function refresh() {
+  if(state.busy)return;state.busy=true;
+  try {
+    state.runs=await api('/runs');renderRuns();
+    if(state.selected && !document.querySelector('#detail-content :focus') && !window.getSelection()?.toString()) {
+      const latest=await api(`/runs/${state.selected}`);
+      if(!state.detail||latest.updated!==state.detail.updated||latest.events.length!==state.detail.events.length){state.detail=latest;renderDetail();}
+    }
+    $('connection-label').textContent='Local server connected';$('connection-dot').classList.remove('offline');
+  } catch(e) {$('connection-label').textContent='Connection lost · retrying';$('connection-dot').classList.add('offline');}
+  finally{state.busy=false;}
+}
+$('new-run').onclick=()=>openRun();$('empty-start').onclick=()=>openRun();$('try-demo').onclick=()=>openRun(true);
+$('close-dialog').onclick=()=>$('run-dialog').close();$('run-search').oninput=renderRuns;
+$('run-list').onclick=e=>{const b=e.target.closest('[data-run]');if(b)selectRun(b.dataset.run).catch(e=>toast(e.message));};
+document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;document.querySelectorAll('[data-tab]').forEach(t=>{t.classList.toggle('active',t===b);t.setAttribute('aria-selected',t===b);});renderDetail();});
+document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>{
+  state.nav=b.dataset.nav;document.querySelectorAll('[data-nav]').forEach(t=>t.classList.toggle('active',t===b));
+  $('breadcrumb').textContent={overview:'Overview',runs:'Test runs',reports:'Reports',settings:'Configuration'}[state.nav];
+  $('overview-page').classList.toggle('hidden',state.nav==='settings');$('settings-page').classList.toggle('hidden',state.nav!=='settings');renderRuns();
+});
+$('run-form').onsubmit=async e=>{
+  e.preventDefault();$('launch-run').disabled=true;showError('form-error','');
+  try{
+    const run=await api('/runs',{method:'POST',body:JSON.stringify({url:$('target-url').value.trim(),mode:$('run-mode').value,scope:$('run-scope').value,requirements:$('run-requirements').value,max_pages:Number($('max-pages').value),max_flows:6,allow_interactions:$('allow-interactions').checked})});
+    $('run-dialog').close();toast('Run started. Follow each decision below.');await refresh();await selectRun(run.id);
+  }catch(error){showError('form-error',error.message);}finally{$('launch-run').disabled=false;}
+};
+$('cancel-run').onclick=async()=>{try{await api(`/runs/${state.selected}/cancel`,{method:'POST'});await refresh();toast('Run cancelled. Partial evidence retained.');}catch(e){toast(e.message);}};
+$('rerun').onclick=()=>openRun(false,state.detail.request);
+(async()=>{try{state.config=await api('/config');renderConfig();await refresh();if(state.runs.length)await selectRun(state.runs[0].id,false);}catch(e){toast(e.message);}setInterval(refresh,2000);})();
