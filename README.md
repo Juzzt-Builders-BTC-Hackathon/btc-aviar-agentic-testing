@@ -6,6 +6,67 @@ Built for the Bessemer Tech Catalyst AI/ML problem statement. AIVAR coordinates 
 
 The focus is maintaining useful tests as a website changes. Repeat runs retain scenario IDs and expected results. Locator drift can be repaired after verification; changed expected behavior remains visible as a failure requiring investigation.
 
+## High-level architecture
+
+```mermaid
+flowchart TB
+    User(["👤 QA Engineer / Developer"])
+
+    subgraph Dashboard["Dashboard — HTML / CSS / JS"]
+        UI_Form["URL · PRD · Scope · Policy"]
+        UI_Results["Results · Logs · Screenshots · Export"]
+    end
+
+    subgraph Backend["Python Backend — FastAPI + Uvicorn · port 8765"]
+        direction TB
+        API["REST API\nserver.py"]
+        Orch["Meta-Orchestrator\npipeline.py · triage.py"]
+        Planner["Planner & Suite Memory\nplanning.py · evolution.py"]
+        Healer["Healer\nhealing.py"]
+        Reporter["Reporter & Classifier\nreporting.py"]
+        Safety["Policy Gate\nsafety.py · models.py"]
+        LLMAdapter["LLM Adapter\nllm.py"]
+    end
+
+    subgraph Execution["Isolated Browser Execution"]
+        Browser["Playwright / Chromium\nbrowser.py"]
+        Contexts["Fresh context per flow\n+ auth storage state"]
+    end
+
+    subgraph Storage["Local Storage"]
+        SQLite[("SQLite WAL\nqa.sqlite3")]
+        Artifacts["Artifacts\nJSON · PNG · HTML · ZIP"]
+    end
+
+    OpenAI(["☁️ OpenAI Responses API"])
+    Target(["🌐 Target Application"])
+    Env["🔑 .env config"]
+
+    User -->|"submit run"| UI_Form
+    UI_Form -->|"POST /api/runs"| API
+    API -->|"validate · admit"| Safety
+    Safety --> Orch
+    Orch --> Planner
+    Planner -->|"plan / re-plan"| LLMAdapter
+    LLMAdapter -->|"HTTPS"| OpenAI
+    OpenAI -->|"structured plan"| LLMAdapter
+    LLMAdapter --> Planner
+    Orch -->|"crawl · execute · validate"| Browser
+    Browser --> Contexts
+    Contexts -->|"HTTP/S"| Target
+    Orch --> Healer
+    Healer -->|"repair candidate"| LLMAdapter
+    Orch --> Reporter
+    Orch -->|"runs · events · fingerprints"| SQLite
+    Reporter --> Artifacts
+    Orch --> Artifacts
+    Env -->|"keys · limits · origins"| Backend
+    API -->|"poll every 2 s"| UI_Results
+    UI_Results -->|"view / download"| User
+```
+
+> **Key design choices:** single Python process, one active run, no LangGraph/Redis/Docker, Python `asyncio` for concurrency, Pydantic contracts throughout, OpenAI used only for planning and constrained repair — all stage transitions are controlled by Python code.
+
 ## For the jury: start here
 
 | Read | What it answers |
