@@ -9,66 +9,135 @@ Runtime hardening update: startup now runs filesystem and real browser readiness
 
 ## 1. System architecture
 
+The pipeline runs **nine sequential agent stages**. Python code controls every transition; OpenAI is called only for planning and constrained locator repair (≤ 5 calls/run).
+
 ```mermaid
 flowchart TB
-    User[QA engineer / developer]
-    subgraph Machine[User workstation]
-        subgraph Frontend[Dashboard — HTML / CSS / JavaScript]
-            Form[URL, Markdown PRD, scope, interaction policy]
-            History[Run history and metrics]
-            Live[Pipeline stages and decision log]
-            Evidence[Plans, results, screenshots and exports]
-        end
-        subgraph Backend[Python 3.12 — FastAPI / Uvicorn — loopback port 8765]
-            Session[Local session cookie, trusted host and origin checks]
-            API[REST API — server.py]
-            Admission[One active asyncio task / cancellation]
-            Policy[URL and action policy — safety.py]
-            Contracts[Pydantic contracts — models.py]
-            Pipeline[Meta-orchestrator — pipeline.py / triage.py]
-            LLM[OpenAI adapter — llm.py]
-            Browser[Browser adapter — browser.py]
-            Planner[Coverage and baseline rules — planning.py]
-            Healer[Fingerprint and identity rules — healing.py]
-            Reporter[Test Quality Report and Defect Classifier]
-            Persistence[Store — store.py]
-        end
-        subgraph Execution[Isolated browser execution]
-            Chromium[Headless Chromium / Playwright]
-            Contexts[Fresh browser context per flow]
-            Auth[Origin-scoped authenticated storage state]
-        end
-        subgraph Storage[Local data directory]
-            SQLite[(SQLite WAL database)]
-            Artifacts[JSON / PNG / Markdown / HTML / JUnit / Python]
-        end
-        Env[Private .env configuration]
+    User(["👤 QA Engineer / Developer\n(URL · PRD · Scope · Interaction policy)"])
+
+    subgraph Dashboard["🖥️ Dashboard  —  HTML / CSS / Vanilla JS  (ui/)"]
+        UI_Submit["Submit run\nPOST /api/runs"]
+        UI_Poll["Poll every 2 s\nGET /api/runs/:id"]
+        UI_Results["Results · Planner · Decision log\nPRD coverage · Defect Classifier\nChanges & repairs · Artifacts · Export ZIP"]
     end
-    OpenAI[OpenAI Responses API]
-    Target[Selected HTTP or HTTPS application]
-    User --> Form
-    Form --> Session --> API --> Admission --> Pipeline
-    API --> History
-    API --> Live
-    API --> Evidence
-    API --> Contracts
-    API --> Policy
-    Pipeline --> Planner
-    Pipeline --> LLM --> OpenAI
-    Pipeline --> Browser --> Chromium --> Contexts --> Target
-    Auth --> Contexts
-    Pipeline --> Healer
-    Pipeline --> Reporter
-    Pipeline --> Persistence
-    Persistence --> SQLite
-    Persistence --> Artifacts
-    Reporter --> Artifacts
-    Env --> Policy
-    Env --> LLM
-    Env --> Auth
+
+    subgraph Backend["🐍 Python Backend  —  FastAPI + Uvicorn  ·  port 8765  (qa_agent/)"]
+
+        subgraph Gate["Entry Gate  (server.py · safety.py · models.py)"]
+            API["REST API\nserver.py"]
+            Admit["Admission guard\n— one active run —"]
+            Policy["Policy gate\nURL allow-list · action DSL\ndestructive/payment block"]
+            Contracts["Pydantic contracts\nRunRequest · Plan · Flow · Step\nHealProposal"]
+        end
+
+        subgraph Orchestrator["Meta-Orchestrator  (pipeline.py · triage.py)"]
+            direction TB
+
+            ExploreAgent["1️⃣  Explorer Agent\nbrowser.py · crawl()\n─────────────────\nTools: Playwright page.goto\n  DOM SNAPSHOT JS (elements · text · links)\n  network route logger\n  auth_state() — storage_state\nOutputs: recon.json"]
+
+            PlannerAgent["2️⃣  Planner Agent\nplanning.py · evolution.py · llm.py\n─────────────────\nTools: previous_suite() — SQLite history\n  remap_requirements() — PRD delta\n  merge_plan() — dedup by signature\n  llm.plan() → OpenAI Responses API\n  baseline_plan() — deterministic fallback\nOutputs: requirements.json · plan.initial.json\n         suite_evolution.json"]
+
+            CoverageAgent["3️⃣  Coverage Checker\nplanning.py · coverage()\n─────────────────\nTools: requirement-link audit\n  ground_oracles() — quoted-literal check\n  gap detector (negative/boundary/business)\nOutputs: coverage_gaps.json · plan.json\n  ➜ triggers one bounded re-plan if fixable gaps"]
+
+            GenAgent["4️⃣  Generator\npipeline.py · export_suite()\n─────────────────\nTools: Pydantic Plan→JSON serialiser\n  suite.json + generated_tests.py writer\nAction DSL: navigate · fill · click\n  assert_text · assert_url · assert_visible\nOutputs: suite.json · generated_tests.py"]
+
+            ValidateAgent["5️⃣  Validator\nbrowser.py · execute_flow(attempt=validation)\n─────────────────\nTools: Playwright locator.expect × 1 per flow\n  scope_ambiguous_selector() — nth-of-type scoping\n  DOM fingerprint capture\nOutputs: validation_report.json\n  scoped_regeneration hint on selector miss"]
+
+            ExecuteAgent["6️⃣  Executor\nbrowser.py · execute_flow(attempt=run)\n─────────────────\nTools: Playwright fresh context per flow\n  page_error · HTTP-error diagnostics listener\n  screenshot capture (masked inputs)\n  PolicyError → blocked classification\nOutputs: run_results.json · *.png screenshots"]
+
+            TriageAgent["7️⃣  Triage / Retry Node\ntriage.py · triage_flow()\n─────────────────\nTools: execute_flow(attempt=retry) — 1 unchanged replay\n  failure_kind detector (selector · assertion · execution)\n  agent_decisions transition log\nOutputs: retry result · transitions log"]
+
+            HealerAgent["8️⃣  Healer Agent\nhealing.py · pipeline.py · repair()\n─────────────────\nTools: store.fingerprint() — SHA-256 element key\n  deterministic_candidate() — similarity ≥ 0.85\n  semantic_match() — tag + text/name/testid guard\n  llm.heal() → OpenAI (only if deterministic fails)\n  execute_flow(attempt=healed) — full-flow confirmation\n  identity gate: repairs limited to the failed locator only\nOutputs: heal_log.json · updated suite.json"]
+
+            ClassifyAgent["9️⃣  Defect Classifier\nhealing.py · classify() + triage.py · defect_report()\n─────────────────\nTools: outcome labels:\n  passed · healed_ok · flaky_test\n  likely_defect · needs_review\n  environment_issue · blocked\n  issue_type + next_action fields\nOutputs: classifications.json · defect_report.json"]
+
+            Reporter["📋  Quality Reporter\nreporting.py · reports()\n─────────────────\nTools: suite_evolution.json merger\n  traceability.json (PRD→scenario→result)\n  HTML / Markdown / JUnit XML renderer\n  evidence ZIP builder (START_HERE.md)\nOutputs: report.md · report.html · junit.xml\n         decision_log.json · export.zip"]
+        end
+
+        LLMAdapter["🤖  LLM Adapter  (llm.py)\nAsyncOpenAI.responses.parse\nmodel: gpt-5.4-mini (configurable)\nmax 5 calls/run · 1 retry · 6500 output tokens\nllm.plan()  —  business-flow test plan\nllm.heal()  —  constrained locator repair"]
+
+        Store["🗄️  Store  (store.py)\nSQLite WAL: runs · events · fingerprints\nArtifact filesystem: data/<run-id>/\nread() · artifact() · fingerprint()"]
+
+        Runtime["⚙️  Runtime  (runtime.py · config.py)\nlaunch_browser() — readiness probe\nerror_details() — diagnostic capture\npython-dotenv .env loader"]
+    end
+
+    subgraph BrowserExec["🌐 Isolated Browser Execution  (Playwright subprocess)"]
+        Chromium["Headless Chromium\n1440×1000 viewport\nservice_workers: block\naccept_downloads: false"]
+        Contexts["Fresh context per flow\n5 s element timeout · 20 s nav timeout\nnetwork route logger\norigin-scoped auth storage state"]
+    end
+
+    subgraph ExtStorage["💾 Local Storage  (data/)"]
+        SQLite[("SQLite WAL\nqa.sqlite3\nruns · events · fingerprints")]
+        Artifacts["Per-run artifacts\nrecon.json · plan.json · suite.json\nrun_results.json · heal_log.json\nclassifications.json · defect_report.json\nreport.html · junit.xml · *.png · export.zip"]
+    end
+
+    OpenAI(["☁️  OpenAI Responses API\ngpt-5.4-mini (default)\nStructured output — Plan / HealProposal"])
+    TargetApp(["🌍  Target Application\nHTTP/S — any origin admitted by QA_ALLOWED_ORIGINS"])
+    Env["🔑  .env\nOPENAI_API_KEY · OPENAI_MODEL\nQA_ALLOWED_ORIGINS\nTARGET_AUTH_ORIGIN · credentials"]
+
+    %% User → Dashboard → API
+    User -->|"URL · PRD · scope\ninteraction policy"| UI_Submit
+    UI_Submit -->|"POST /api/runs"| API
+    API --> Admit --> Policy --> Contracts
+    Contracts --> ExploreAgent
+
+    %% Pipeline flow
+    ExploreAgent -->|"recon.json"| PlannerAgent
+    PlannerAgent -->|"plan.initial.json"| CoverageAgent
+    CoverageAgent -->|"plan.json + gaps"| GenAgent
+    GenAgent -->|"suite.json"| ValidateAgent
+    ValidateAgent -->|"validation_report.json"| ExecuteAgent
+    ExecuteAgent -->|"run result"| TriageAgent
+    TriageAgent -->|"repeated selector failure"| HealerAgent
+    HealerAgent -->|"healed result"| ClassifyAgent
+    TriageAgent -->|"passed / escalate"| ClassifyAgent
+    ClassifyAgent -->|"labels + defect records"| Reporter
+
+    %% Re-plan feedback loop
+    CoverageAgent -->|"fixable gaps → 1 re-plan"| LLMAdapter
+    PlannerAgent -->|"llm.plan()"| LLMAdapter
+    HealerAgent -->|"llm.heal() if deterministic fails"| LLMAdapter
+    LLMAdapter -->|"structured Plan / HealProposal"| OpenAI
+    OpenAI -->|"parsed response"| LLMAdapter
+
+    %% Browser tools
+    ExploreAgent -->|"crawl()"| Chromium
+    ValidateAgent -->|"execute_flow(validation)"| Chromium
+    ExecuteAgent -->|"execute_flow(run)"| Chromium
+    TriageAgent -->|"execute_flow(retry)"| Chromium
+    HealerAgent -->|"execute_flow(healed)"| Chromium
+    Chromium --> Contexts -->|"HTTP/S"| TargetApp
+
+    %% Storage
+    ExploreAgent & PlannerAgent & CoverageAgent & GenAgent --> Store
+    ValidateAgent & ExecuteAgent & HealerAgent & ClassifyAgent & Reporter --> Store
+    Store --> SQLite & Artifacts
+
+    %% Config
+    Env -->|"keys · origins · credentials"| LLMAdapter & Runtime & Contexts
+
+    %% Dashboard polling
+    UI_Poll -->|"GET /api/runs/:id"| API
+    API -->|"status · events · results"| UI_Results
+    UI_Results -->|"view / download"| User
 ```
 
-The dashboard polls the API every two seconds. The server owns the job lifecycle and browser processes. OpenAI proposes structured plans and, when needed, constrained repair candidates. Python code decides stage transitions and test outcomes.
+The dashboard polls the API every two seconds. The server owns the job lifecycle and browser processes. OpenAI proposes structured plans and, when needed, constrained repair candidates. Python code decides every stage transition and test outcome.
+
+### Agent summary
+
+| # | Agent | Module(s) | Responsibility |
+|---|---|---|---|
+| 1️⃣ | **Explorer** | `browser.py · crawl()` | Crawls the target URL up to the page budget; captures DOM snapshots (elements, text, links) and network block logs. Outputs `recon.json`. |
+| 2️⃣ | **Planner** | `planning.py · evolution.py · llm.py` | Loads previous suite from SQLite, remaps PRD requirements, deduplicates by action signature, calls `llm.plan()` for new scenarios. Deterministic `baseline_plan()` used when no OpenAI key is set. |
+| 3️⃣ | **Coverage Checker** | `planning.py · coverage()` | Audits requirement links, verifies assertions are quoted literals, detects missing negative/boundary/business paths. Triggers one bounded re-plan for fixable gaps. |
+| 4️⃣ | **Generator** | `pipeline.py · export_suite()` | Serialises the `Plan` model to `suite.json` and writes the replay entry-point (`generated_tests.py`). No model-generated Python is ever evaluated. |
+| 5️⃣ | **Validator** | `browser.py · execute_flow(validation)` | Replays each flow once to verify locators in the live page state. Scopes ambiguous repeated selectors to the nearest verified anchor. Captures DOM fingerprints. |
+| 6️⃣ | **Executor** | `browser.py · execute_flow(run)` | Runs every flow in a fresh isolated browser context. Records page errors, HTTP errors, masked screenshots. PolicyErrors surface as `blocked`. |
+| 7️⃣ | **Triage / Retry** | `triage.py · triage_flow()` | Reruns each failing flow unchanged once to test repeatability. Detects whether failure kind and step index match before routing to the Healer. |
+| 8️⃣ | **Healer** | `healing.py · pipeline.py · repair()` | Deterministic fingerprint match (similarity ≥ 0.85) first; `llm.heal()` only as fallback. Semantic identity gate + full-flow confirmation required before the suite is updated. |
+| 9️⃣ | **Defect Classifier** | `healing.py · classify()` `triage.py · defect_report()` | Labels each scenario: `passed · healed_ok · flaky_test · likely_defect · needs_review · environment_issue · blocked`. Adds confidence score and `next_action` for the engineer. |
+| 📋 | **Quality Reporter** | `reporting.py · reports()` | Builds `report.md`, `report.html`, `junit.xml`, PRD traceability matrix, suite evolution summary, and the evidence ZIP. |
 
 ## 2. Technologies actually used
 
