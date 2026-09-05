@@ -1,6 +1,6 @@
-# AIVAR — Autonomous Test Orchestration Agent
+# Autonomous Test Orchestration Agent
 
-**Give AIVAR a website URL. Get a reusable test suite, verified locator repairs, and a Test Quality Report with browser evidence.**
+**Give a website URL. Get a reusable test suite, verified locator repairs, and a Test Quality Report with browser evidence.**
 
 Built for the Bessemer Tech Catalyst AI/ML problem statement. AIVAR coordinates **Planner → Generator → Executor → Healer → Defect Classifier**, evaluates coverage between stages, and records why it reused, extended, retried, repaired or escalated a test.
 
