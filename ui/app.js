@@ -20,26 +20,29 @@ function openRun(demo=false, request=null) {
   $('max-pages').value=request?.max_pages || 5;$('allow-interactions').checked=request?.allow_interactions || false;
   $('resource-policy').value=request?.resource_policy || 'compatible';
   $('navigation-origins').value=(request?.navigation_origins || []).join(', ');
+  $('advanced-options').open=Boolean(request?.requirements || request?.navigation_origins?.length);
   showError('form-error','');$('run-dialog').showModal();
 }
 function renderRuns() {
   const query=$('run-search').value.toLowerCase();
-  const runs=state.runs.filter(r=>r.request.url.toLowerCase().includes(query)&&(state.nav!=='reports'||r.status==='completed'));
+  const filtered=state.runs.filter(r=>r.request.url.toLowerCase().includes(query)&&(state.nav!=='reports'||r.status==='completed'));
+  const runs=state.nav==='overview'&&!query?filtered.slice(0,6):filtered;
+  $('view-all-runs').classList.toggle('hidden',state.nav!=='overview');
   $('run-count').textContent=state.runs.length;$('recent-count').textContent=runs.length;
   $('empty-runs').classList.toggle('hidden',runs.length>0);
   $('run-list').innerHTML=runs.map(r=>{
     const host=new URL(r.request.url).host,s=r.summary;
-    return `<tr><td><div class="run-target"><span class="target-icon">◎</span><button class="run-link" data-run="${r.id}"><strong>${esc(host)}</strong><small>${r.id.slice(0,8)} · ${r.request.mode==='openai'?'OpenAI':'Baseline'}</small></button></div></td><td>${pill(r.status)}</td><td><span class="result-count">${s.total!==undefined?`${s.passed} / ${s.total} passed`:'—'}</span></td><td class="muted">${time(r.created)}</td><td><button class="text-button" data-run="${r.id}" aria-label="Open run ${r.id.slice(0,8)}">↗</button></td></tr>`;
+    return `<tr><td><div class="run-target"><span class="target-icon" aria-hidden="true">${esc(host.slice(0,1).toUpperCase())}</span><button class="run-link" data-run="${r.id}"><strong>${esc(host)}</strong><small>${r.id.slice(0,8)} · ${r.request.mode==='openai'?'OpenAI':'Baseline'}</small></button></div></td><td>${pill(r.status)}</td><td><span class="result-count">${s.total!==undefined?`${s.passed} / ${s.total} passed`:'—'}</span></td><td class="muted">${time(r.created)}</td><td><button class="text-button" data-run="${r.id}" aria-label="Open run ${r.id.slice(0,8)}">↗</button></td></tr>`;
   }).join('');
   const complete=state.runs.filter(r=>r.status==='completed');
   const totals=complete.reduce((a,r)=>({total:a.total+(r.summary.total||0),passed:a.passed+(r.summary.passed||0),healed:a.healed+(r.summary.healed||0),attention:a.attention+(r.summary.failed||0)+(r.summary.blocked||0)}),{total:0,passed:0,healed:0,attention:0});
   $('metric-total').textContent=state.runs.length;$('metric-rate').textContent=totals.total?`${Math.round(totals.passed/totals.total*100)}%`:'—';
-  $('metric-rate-caption').textContent=totals.total?`${totals.passed} of ${totals.total} scenarios · not coverage`:'No completed scenarios yet';
+  $('metric-rate-caption').textContent=totals.total?`${totals.passed} of ${totals.total} scenarios passed`:'No completed scenarios yet';
   $('metric-heals').textContent=totals.healed;$('metric-attention').textContent=totals.attention;
 }
 function artifactUrl(name) {return `/api/runs/${state.selected}/artifacts/${encodeURIComponent(name)}`;}
 function diagnosticHTML(r) {
-  return r.diagnostics?.length?`<div class="result-item"><span class="pill needs_review">Browser / HTTP warnings · ${esc(r.name)}</span><pre class="code">${esc(JSON.stringify(r.diagnostics,null,2))}</pre></div>`:'';
+  return r.diagnostics?.length?`<details class="result-item"><summary class="result-summary"><span class="pill needs_review">Browser warnings (${r.diagnostics.length}) · ${esc(r.name)}</span></summary><pre class="code">${esc(JSON.stringify(r.diagnostics,null,2))}</pre></details>`:'';
 }
 function resultHTML(r) {
   const image=r.healed_attempt?.screenshot||r.screenshot;
@@ -94,16 +97,24 @@ async function refresh() {
       const latest=await api(`/runs/${state.selected}`);
       if(!state.detail||latest.updated!==state.detail.updated||latest.events.length!==state.detail.events.length){state.detail=latest;renderDetail();}
     }
-    $('connection-label').textContent='Local server connected';$('connection-dot').classList.remove('offline');
+    $('connection-label').textContent='Connected';$('connection-dot').classList.remove('offline');
   } catch(e) {$('connection-label').textContent='Connection lost · retrying';$('connection-dot').classList.add('offline');}
   finally{state.busy=false;}
 }
 $('new-run').onclick=()=>openRun();$('empty-start').onclick=()=>openRun();$('try-demo').onclick=()=>openRun(true);
+$('view-all-runs').onclick=()=>document.querySelector('[data-nav="runs"]').click();
+$('run-form').addEventListener('invalid',e=>{if(e.target.closest('.advanced-options'))$('advanced-options').open=true;},true);
 $('close-dialog').onclick=()=>$('run-dialog').close();$('run-search').oninput=renderRuns;
 $('run-list').onclick=e=>{const b=e.target.closest('[data-run]');if(b)selectRun(b.dataset.run).catch(e=>toast(e.message));};
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;document.querySelectorAll('[data-tab]').forEach(t=>{t.classList.toggle('active',t===b);t.setAttribute('aria-selected',t===b);});renderDetail();});
 document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>{
   state.nav=b.dataset.nav;document.querySelectorAll('[data-nav]').forEach(t=>t.classList.toggle('active',t===b));
+  document.querySelectorAll('[data-nav]').forEach(t=>{if(t===b)t.setAttribute('aria-current','page');else t.removeAttribute('aria-current');});
+  $('page-title').textContent={overview:'Quality, at a glance.',runs:'Test runs',reports:'Reports',settings:'Configuration'}[state.nav];
+  $('page-description').textContent={overview:'Track test runs, review outcomes, and find what needs attention.',runs:'Browse your run history and inspect the evidence.',reports:'Review completed runs and export their evidence.',settings:''}[state.nav];
+  $('runs-heading').textContent={overview:'Recent runs',runs:'All runs',reports:'Completed runs',settings:'Recent runs'}[state.nav];
+  $('runs-description').textContent=state.nav==='overview'?'The latest six runs. Select a target to inspect its results.':'Select a target to view results, plans, and browser evidence.';
+  document.querySelector('.metrics').classList.toggle('hidden',state.nav!=='overview');
   $('breadcrumb').textContent={overview:'Overview',runs:'Test runs',reports:'Reports',settings:'Configuration'}[state.nav];
   $('overview-page').classList.toggle('hidden',state.nav==='settings');$('settings-page').classList.toggle('hidden',state.nav!=='settings');renderRuns();
 });
@@ -116,4 +127,4 @@ $('run-form').onsubmit=async e=>{
 };
 $('cancel-run').onclick=async()=>{try{await api(`/runs/${state.selected}/cancel`,{method:'POST'});await refresh();toast('Run cancelled. Partial evidence retained.');}catch(e){toast(e.message);}};
 $('rerun').onclick=()=>openRun(false,state.detail.request);
-(async()=>{try{state.config=await api('/config');renderConfig();await refresh();if(state.runs.length)await selectRun(state.runs[0].id,false);}catch(e){toast(e.message);}setInterval(refresh,2000);})();
+(async()=>{try{state.config=await api('/config');renderConfig();await refresh();const active=state.runs.find(r=>!terminal(r.status));if(active)await selectRun(active.id,false);}catch(e){toast(e.message);}setInterval(refresh,2000);})();
