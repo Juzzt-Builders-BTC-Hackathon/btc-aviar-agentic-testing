@@ -2,6 +2,8 @@
 
 This document describes the code currently implemented in this repository. Mermaid diagrams render in GitHub and Mermaid-capable Markdown previews.
 
+Runtime hardening update: startup now runs filesystem and real browser readiness probes (`runtime.py`); failed readiness blocks job admission. Compatible resource loading permits external assets/read requests, while navigation is constrained to the site, canonical redirects and per-run additional origins. The [feature guide](FEATURES.md) documents these controls and diagnostics in detail.
+
 ## 1. System architecture
 
 ```mermaid
@@ -232,14 +234,15 @@ The following are separate boundaries:
 | Boundary | Behavior |
 |---|---|
 | Target admission | `*` accepts any HTTP(S) target; an explicit list restricts targets |
-| Browser requests/navigation | Remain on the selected target origin for each run |
+| Browser resources | Compatible mode permits external HTTP(S) read requests; strict mode restricts origins; non-read methods require interaction permission |
+| Browser navigation | Selected site, common www/HTTPS canonical redirects and explicit per-run navigation origins |
 | Authentication | Credentials/storage state only apply to `TARGET_AUTH_ORIGIN` |
 | Dashboard API | Loopback, trusted host, local HttpOnly cookie and origin checks; no wildcard CORS |
 | Dashboard as a test target | Only its `/demo` paths are accepted |
 | Generated actions | Fixed DSL, interaction opt-in, destructive/transaction click checks |
 | OpenAI access | Backend-only API key; observations redacted for configured secrets |
 
-Origin wildcard admission does not automatically support cross-origin SSO, separate API hosts or CDN dependencies. Such applications require a separate per-run resource-origin policy, which is not implemented here.
+External CDN/read-API dependencies are supported by compatible resource loading. SSO, MFA and cross-frame interaction are not automatically solved by enabling resources or navigation origins; configure an authenticated session where needed. Startup readiness validates local browser/filesystem access, not the accessibility or semantic testability of every target site.
 
 ## 7. Local deployment topology
 

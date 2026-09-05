@@ -30,6 +30,8 @@ def baseline_plan(pages, limit):
             elements = [e for e in page["elements"] if e["text"] and e.get("testid") in {"title", "inventory-item-name"}]
         if not elements:
             elements = [e for e in page["elements"] if e["text"] and e["tag"] not in {"input", "textarea"}]
+        if not elements and page["text"].strip():
+            elements = [{"selector": "body", "text": page["text"].strip().splitlines()[0][:160]}]
         if not elements: continue
         element = elements[0]
         flows.append(Flow(id=f"smoke_{len(flows)+1}", name=f"Page baseline: {page['title'] or page['url']}",
@@ -47,6 +49,10 @@ def coverage(plan, pages, requirements):
     valid = {r["id"] for r in requirements}
     if linked - valid: raise ValueError("Plan references unknown requirement IDs")
     gaps = list(plan.gaps)
+    for page in pages:
+        gaps.extend(page.get("limitations", []))
+        if page.get("network_warnings"): gaps.append(f"{page['url']}: {len(page['network_warnings'])} requests blocked by the run policy; some content may be missing.")
+        if page.get("crawl_failures"): gaps.append(f"{len(page['crawl_failures'])} pages could not be explored; see recon.json for causes.")
     for req in requirements:
         if req["id"] not in linked: gaps.append(f"{req['id']}: no planned test — {req['text']}")
     has_inputs = any(e["tag"] in {"input", "select", "textarea"} for p in pages for e in p["elements"])

@@ -120,6 +120,7 @@ def test_api_local_session_and_request_validation(tmp_path,monkeypatch):
     from fastapi.testclient import TestClient
     from qa_agent import server
     monkeypatch.setattr(server,"store",Store(tmp_path))
+    monkeypatch.setattr(server,"preflight",AsyncMock(return_value={"ready":True,"checks":[],"errors":[]}))
     with TestClient(server.app) as client:
         assert client.get('/api/runs').status_code==401
         assert client.get('/').status_code==200

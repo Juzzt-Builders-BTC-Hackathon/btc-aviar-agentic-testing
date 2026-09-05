@@ -12,3 +12,5 @@ foreach ($qaParent in $qaProcess) {
 $qaStarted = Start-Process -FilePath '.venv/Scripts/python.exe' -ArgumentList 'run.py' -WorkingDirectory $qaRoot -WindowStyle Hidden -RedirectStandardOutput 'data/server.stdout.log' -RedirectStandardError 'data/server.stderr.log' -PassThru
 $qaStarted.Id | Set-Content -LiteralPath 'data/server.pid'
 Write-Output "Local QA server launcher: $($qaStarted.Id)"
+& ./.venv/Scripts/python.exe -m scripts.wait_ready
+if ($LASTEXITCODE -ne 0) { throw 'The local server did not pass readiness. See the diagnostics above.' }

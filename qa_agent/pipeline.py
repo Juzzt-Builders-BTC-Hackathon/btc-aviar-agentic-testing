@@ -10,6 +10,7 @@ from .models import RunRequest
 from .planning import baseline_plan, coverage, requirements_list, ground_oracles
 from .reporting import reports
 from .safety import redact, target_url
+from .runtime import launch_browser, error_details
 
 
 def fingerprint_key(url, flow, index):
@@ -34,7 +35,7 @@ async def run_pipeline(store, rid):
         async with asyncio.timeout(600):
             event("recon", "Starting isolated Chromium; run deadline is 10 minutes.")
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True)
+                browser = await launch_browser(pw)
                 try:
                     state = await auth_state(browser, request.url)
                     if state: event("recon", "Authenticated session established from local configuration.")
@@ -57,7 +58,7 @@ async def run_pipeline(store, rid):
                     gaps.extend(ground_oracles(plan, requirements))
                     for flow in plan.flows:
                         for step in flow.steps:
-                            if step.action == "navigate": target_url(request.url, step.target)
+                            if step.action == "navigate": target_url(request.url, step.target, request.navigation_origins)
                             if step.action in {"assert_text", "assert_url"} and not step.value.strip(): raise ValueError("Empty assertion rejected")
                         if flow.oracle == "requirement" and not flow.requirement_ids:
                             raise ValueError("Requirement-backed oracle must reference a supplied requirement")
@@ -137,7 +138,12 @@ async def run_pipeline(store, rid):
         raise
     except Exception as exc:
         error = "Run exceeded its 10-minute deadline" if isinstance(exc, TimeoutError) else redact(str(exc))[:1500]
-        store.update(rid, status="failed", summary={"error": error, "usage": llm.usage()})
+        diagnostic = error_details(exc, store.get(rid)["stage"])
+        try:
+            store.artifact(rid, "runtime_error.json", diagnostic)
+        except OSError as artifact_error:
+            diagnostic["artifact_write_error"] = redact(str(artifact_error))[:500]
+        store.update(rid, status="failed", summary={"error": error, "diagnostic": diagnostic, "usage": llm.usage()})
         store.event(rid, "failed", f"{type(exc).__name__}: {error}")
 
 

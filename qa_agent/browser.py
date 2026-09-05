@@ -2,11 +2,11 @@ import os
 import time
 from urllib.parse import urlsplit
 from playwright.async_api import expect
-from .safety import PolicyError, origin, target_url, check_action, redact
+from .safety import PolicyError, origin, target_url, check_action, redact, request_block_reason
 
 # Input values and hidden fields are deliberately excluded from the observation.
 SNAPSHOT = r"""() => {
- const nodes = [...document.querySelectorAll('a,button,input,select,textarea,h1,h2,[role="alert"],[data-testid],[data-test]')];
+ const nodes = [...document.querySelectorAll('a,button,input,select,textarea,h1,h2,h3,[role="alert"],[data-testid],[data-test]')];
  const elements = nodes.filter(e => e.getClientRects().length).slice(0,100).map(e => {
    const attr = k => e.getAttribute(k) || '';
    const q = s => JSON.stringify(s);
@@ -26,6 +26,7 @@ SNAPSHOT = r"""() => {
      name:attr('name'), type:attr('type'), testid:attr('data-testid') || attr('data-test'), role:attr('role'), href:attr('href')};
  });
  return {url:location.href, title:document.title, text:document.body.innerText.slice(0,7000), elements,
+   iframe_count:document.querySelectorAll('iframe').length, password_fields:document.querySelectorAll('input[type="password"]').length,
    links:[...document.querySelectorAll('a[href]')].map(e=>e.href).slice(0,80)};
 }"""
 
@@ -55,21 +56,21 @@ async def scope_ambiguous_selector(page, target, anchor):
     }""", {"target": target, "anchor": anchor})
 
 
-async def new_context(browser, base, interactions=False, state=None):
+async def new_context(browser, base, interactions=False, state=None, resource_policy="compatible", navigation_origins=()):
     kwargs = {"viewport": {"width": 1440, "height": 1000}, "service_workers": "block", "accept_downloads": False}
     if state: kwargs["storage_state"] = state
     context = await browser.new_context(**kwargs)
     context.set_default_timeout(5000)
     context.set_default_navigation_timeout(20000)
+    context.qa_network_log = []
     async def route_request(route):
         request = route.request
-        try:
-            if origin(request.url) != origin(base):
-                return await route.abort()
-            if request.is_navigation_request(): target_url(base, request.url)
-            if not interactions and request.method not in {"GET", "HEAD", "OPTIONS"}:
-                return await route.abort()
-        except (ValueError, PolicyError): return await route.abort()
+        main_navigation = request.is_navigation_request() and request.frame.parent_frame is None
+        reason = request_block_reason(base, request.url, request.method, main_navigation, interactions, resource_policy, navigation_origins)
+        if reason:
+            if len(context.qa_network_log) < 50:
+                context.qa_network_log.append({"type": "blocked_request", "path": urlsplit(request.url).path, "reason": reason})
+            return await route.abort()
         await route.continue_()
     await context.route("**/*", route_request)
     return context
@@ -94,8 +95,9 @@ async def auth_state(browser, base):
 
 
 async def crawl(browser, request, state, event):
-    context = await new_context(browser, request.url, state=state)
+    context = await new_context(browser, request.url, state=state, resource_policy=request.resource_policy, navigation_origins=request.navigation_origins)
     pages, queue, seen = [], [request.url], set()
+    failures = []
     try:
         page = await context.new_page()
         while queue and len(pages) < request.max_pages:
@@ -103,28 +105,38 @@ async def crawl(browser, request, state, event):
             if url in seen: continue
             seen.add(url)
             try:
-                target_url(request.url, url)
+                target_url(request.url, url, request.navigation_origins)
+                context.qa_network_log.clear()
                 response = await page.goto(url, wait_until="domcontentloaded")
                 await page.locator("body").wait_for()
-                await page.wait_for_timeout(350)
+                try: await page.wait_for_load_state("load", timeout=5000)
+                except Exception: pass
+                await page.wait_for_timeout(800)
                 data = await snapshot(page)
                 data["http_status"] = response.status if response else None
+                data["network_warnings"] = list(context.qa_network_log)
+                data["limitations"] = []
+                if data["password_fields"] and not state: data["limitations"].append("Login form detected; configure an authenticated session for protected content.")
+                if data["iframe_count"]: data["limitations"].append("Embedded frames detected; this version plans and asserts against the main document only.")
                 pages.append(data)
                 event(f"Observed {data['title'] or 'untitled page'} ({len(data['elements'])} visible elements)")
                 for link in data["links"]:
                     try:
-                        candidate = target_url(request.url, link).split("#")[0]
+                        candidate = target_url(request.url, link, request.navigation_origins).split("#")[0]
                         if candidate not in seen and candidate not in queue: queue.append(candidate)
                     except ValueError: pass
             except Exception as exc:
-                event(f"Page could not be explored: {type(exc).__name__}")
-        if not pages: raise ValueError("No pages could be explored. Check the URL, allowlist and browser connectivity.")
+                failure = f"{type(exc).__name__}: {redact(str(exc))[:600]}"
+                failures.append(failure)
+                event(f"Page could not be explored: {failure}")
+        if not pages: raise ValueError("No pages could be explored. " + (failures[-1] if failures else "Check the URL and connectivity."))
+        if failures: pages[0]["crawl_failures"] = failures
         return pages
     finally: await context.close()
 
 
 async def execute_flow(browser, request, flow, state, folder=None, attempt="run"):
-    context = await new_context(browser, request.url, request.allow_interactions, state)
+    context = await new_context(browser, request.url, request.allow_interactions, state, request.resource_policy, request.navigation_origins)
     page = await context.new_page()
     diagnostics = []
     page.on("pageerror", lambda error: diagnostics.append({"type": "page_error", "message": redact(str(error))[:500]}) if len(diagnostics) < 30 else None)
@@ -136,7 +148,7 @@ async def execute_flow(browser, request, flow, state, folder=None, attempt="run"
         for index, step in enumerate(flow.steps):
             check_action(step, request.allow_interactions)
             if step.action == "navigate":
-                response = await page.goto(target_url(request.url, step.target), wait_until="domcontentloaded")
+                response = await page.goto(target_url(request.url, step.target, request.navigation_origins), wait_until="domcontentloaded")
                 # A SPA can render its intended state after an HTTP error response.
                 # HTTP errors remain separate diagnostics; evaluate the declared UI oracle.
             elif step.action == "assert_url":
@@ -177,6 +189,7 @@ async def execute_flow(browser, request, flow, state, folder=None, attempt="run"
                 result["scoped_regeneration"] = await scope_ambiguous_selector(page, flow.steps[index].target, flow.steps[index-1].target)
             except Exception: pass
     finally:
+        diagnostics.extend(context.qa_network_log[:max(0, 50-len(diagnostics))])
         result["duration_ms"] = round((time.monotonic() - started) * 1000)
         if folder:
             filename = f"{flow.id}-{attempt}.png"

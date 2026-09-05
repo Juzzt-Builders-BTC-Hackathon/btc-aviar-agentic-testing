@@ -28,14 +28,35 @@ def validate_url(url):
     return url
 
 
-def target_url(base, value):
+def navigation_allowed(base, url, extra=()):
+    source, dest = urlsplit(origin(base)), urlsplit(origin(url))
+    if origin(url) == origin(base) or origin(url) in extra: return True
+    # Common canonical redirects: www alias and HTTP -> HTTPS on default ports.
+    return (source.hostname.removeprefix("www.") == dest.hostname.removeprefix("www.")
+        and source.port is None and dest.port is None
+        and (source.scheme == dest.scheme or (source.scheme == "http" and dest.scheme == "https")))
+
+
+def target_url(base, value, navigation_origins=()):
     url = urljoin(base, value)
-    if origin(url) != origin(base):
-        raise PolicyError("Cross-origin navigation is blocked")
+    if not navigation_allowed(base, url, navigation_origins):
+        raise PolicyError("Navigation left the selected site. Add the required origin to this run's navigation origins.")
     validate_url(url)
     if re.search(r"(?:logout|delete|remove|purchase|payment|transfer|unsubscribe)", urlsplit(url).path, re.I):
         raise PolicyError("Navigation has a potentially destructive action")
     return url
+
+
+def request_block_reason(base, url, method, main_navigation, interactions, policy="compatible", extra=()):
+    try:
+        validate_url(url)
+        if main_navigation: target_url(base, url, extra)
+        elif policy == "same_origin" and not navigation_allowed(base, url, extra):
+            return "External resource blocked by strict resource policy"
+        if not interactions and method not in {"GET", "HEAD", "OPTIONS"}:
+            return "Non-read HTTP method blocked by read-only policy"
+    except ValueError as exc: return str(exc)
+    return None
 
 
 def redact(value):

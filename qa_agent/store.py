@@ -41,9 +41,14 @@ class Store:
 
     def create(self, request):
         rid = uuid4().hex
-        with self.connect() as db:
-            db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)", (rid, now(), now(), "queued", "queued", json.dumps(request), "{}"))
-        (self.root / rid).mkdir()
+        folder = self.root / rid
+        folder.mkdir()
+        try:
+            with self.connect() as db:
+                db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)", (rid, now(), now(), "queued", "queued", json.dumps(request), "{}"))
+        except Exception:
+            folder.rmdir()  # Only the empty directory created above.
+            raise
         return rid
 
     def update(self, rid, status=None, stage=None, summary=None):

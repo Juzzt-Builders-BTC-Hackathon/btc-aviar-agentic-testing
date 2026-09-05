@@ -44,13 +44,13 @@ The local `.env` in this workspace is configured with the supplied demo login. C
 
 Use **https://www.saucedemo.com/inventory.html** as the run URL. Aviar logs in before recon and reuses the authenticated storage state in isolated contexts. The target origin must match `TARGET_AUTH_ORIGIN`. This configuration tests authenticated product flows; it does not claim coverage of all supplied user personas or login failures. To use another persona, change the local username and restart.
 
-All HTTP(S) target origins are enabled with `QA_ALLOWED_ORIGINS=*`. To restrict targets again, replace `*` with comma-separated exact origins. Each browser run still stays within its selected target origin; wildcard target admission does not enable cross-origin browser navigation or dashboard CORS. For authenticated sites, configure login selectors or `QA_STORAGE_STATE` and `TARGET_AUTH_ORIGIN`. Storage state is an absolute path to a private Playwright JSON session file. State and credentials never enter model prompts or exported suites.
+All HTTP(S) target origins are enabled with `QA_ALLOWED_ORIGINS=*`. To restrict targets again, replace `*` with comma-separated exact origins. Compatible resource loading permits external assets and read requests; strict mode is available per run. Navigation permits the selected site, common www/HTTP-to-HTTPS redirects, and any explicitly added navigation origins. Dashboard CORS remains restricted. For authenticated sites, configure login selectors or `QA_STORAGE_STATE` and `TARGET_AUTH_ORIGIN`. Storage state is an absolute path to a private Playwright JSON session file. State and credentials never enter model prompts or exported suites.
 
 ## Behavior and boundaries
 
 - OpenAI Responses API with strict Pydantic output validation, `store=False`, configurable model, request timeout, retry limits and reported token usage.
 - Deterministic orchestration: one coverage re-plan, one locator-regeneration attempt, one unchanged failure rerun, and one verified runtime repair. No arbitrary model-authored Python or shell execution.
-- Same-origin browser requests; wildcard or explicit target allowlist; blocked downloads and service workers; isolated contexts; transactions/destructive click intents blocked.
+- Compatible or strict resource policy; wildcard or explicit target admission; scoped navigation; blocked downloads and service workers; isolated contexts; transactions/destructive click intents blocked.
 - Read-only mode blocks clicks, fills and non-read HTTP methods after explicit authentication. It cannot guarantee that an application’s GET endpoints have no side effects. Use test environments.
 - Interactions are opt-in and may execute during validation, execution and retries. Use resettable test data. Payments, deletion and order completion remain blocked in this version.
 - Assertions remain unchanged during healing. Repeated product locators can be scoped to the smallest container of the immediately preceding verified text anchor; the expected price is never used to choose the product. Classification is evidence-based and heuristic: `likely_defect` requires a repeated requirement-backed failure. Inferred expectations remain `needs_review`.
@@ -84,6 +84,12 @@ The replay command returns zero only when all scenarios pass. Run it from this p
 
 ## Operations
 
+The **Configuration** screen shows real startup readiness: writable data storage and a successful browser launch/DOM check. `/api/health` is liveness; `/api/readiness` returns 200 only when those checks pass. Jobs are rejected with recovery guidance when readiness fails.
+
+If you see **`[WinError 5] Access is denied`**, check the run timestamp. The original restricted-sandbox failure remains in history; the current server may already be healthy. Use **Run again** after checking readiness. For a new failure, launch `./start.ps1` from a normal local PowerShell terminal, check directory permissions, and have IT approve blocked browser/driver executables when required. The app cannot override Windows permissions. `runtime_error.json` records the failing stage and guidance.
+
+Browser temporary files default to `data/runtime/browser-temp`. Override `QA_BROWSER_TEMP_DIR` with a writable location if needed. Set `QA_BROWSER_CHANNEL=chrome` or `msedge` to use an installed browser; the default remains bundled `chromium`.
+
 - **Stop:** Ctrl+C in the server terminal. A background instance started during setup records its launcher PID in `data/server.pid`; verify that process and its `run.py` child before stopping it.
 - **Restart:** run `start.ps1`. Configuration changes require restart. A new local session cookie is issued when you reload the dashboard.
 - **Backup:** stop the server and copy the entire `data/` directory to an access-controlled location. It contains database, screenshots, DOM observations, requirements and reports. Protect it as application data; `.gitignore` is not encryption.
@@ -95,6 +101,8 @@ The replay command returns zero only when all scenarios pass. Run it from this p
 ## Source documents and API references
 
 See [Architecture and technology stack](ARCHITECTURE.md) for detailed component, execution-sequence, deployment and data-flow diagrams, plus the technologies actually used by this implementation.
+
+See [Implemented features and operating guide](FEATURES.md) for the detailed feature inventory, configuration behavior, evidence formats and supported website boundaries.
 
 The original [research document](Autonomous_Test_Orchestration_Agent_Deep_Research.md) is preserved. Its vendor comparisons and numerical claims were treated as proposal context, not independently established facts or instructions.
 

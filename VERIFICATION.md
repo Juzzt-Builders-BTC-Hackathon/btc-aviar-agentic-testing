@@ -2,6 +2,18 @@
 
 Date: 2026-09-05. Platform: Windows, Python 3.12.10, Chromium via Playwright 1.58.0.
 
+## Latest hardening verification
+
+- **24 unit/API/lifecycle tests passed**, including real-policy tests for external resources, canonical redirects, additional origins, failed-readiness admission, and permission-error persistence when artifact writing also fails.
+- Real startup probes passed: data-directory read/write plus browser launch and DOM access.
+- Compatible-mode external JavaScript execution passed; the same fixture was blocked and diagnosed in strict mode.
+- Explicit additional navigation origins were verified in a real browser.
+- Full dashboard/mobile, replay, cart/negative-case, repair, authenticated SauceDemo baseline and cancellation checks passed again.
+- Live OpenAI run against **https://eduvale.in** (`58ada30de9eb45e3ae292965ea77913d`) completed with **4/4 scenarios passed**, 11 retained coverage gaps, 43,843 input tokens, 1,513 output tokens and one logical model call; duration approximately 58.6 seconds.
+- Detailed records: `data/verification/compatibility.json` and `data/verification/verification.json`.
+
+The original access-denied run below remains historical evidence. Current readiness probes succeed. The feature inventory is [FEATURES.md](FEATURES.md); the earlier results below remain a dated audit trail.
+
 ## Running application
 
 Dashboard: **http://127.0.0.1:8765**

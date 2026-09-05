@@ -15,6 +15,7 @@ from .models import RunRequest
 from .pipeline import run_pipeline
 from .safety import validate_url, redact
 from .store import Store
+from .runtime import preflight, error_details
 
 store = Store(config.DATA)
 tasks = {}
@@ -24,6 +25,7 @@ session_token = secrets.token_urlsafe(32)
 @asynccontextmanager
 async def lifespan(app):
     store.recover()
+    app.state.runtime = await preflight()
     yield
     for task in tasks.values(): task.cancel()
     if tasks: await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -63,12 +65,19 @@ async def index():
 async def health(): return {"status": "ok", "version": "0.1.0"}
 
 
+@app.get("/api/readiness")
+async def readiness():
+    result = getattr(app.state, "runtime", {"ready": False, "errors": [], "checks": []})
+    return JSONResponse(result, status_code=200 if result["ready"] else 503)
+
+
 @app.get("/api/config")
 async def settings():
     return {"openai_configured": bool(os.getenv("OPENAI_API_KEY")), "model": config.MODEL,
         "allowed_origins": sorted(config.ALLOWED), "allow_all_origins": "*" in config.ALLOWED, "demo_url": config.DEMO_ORIGIN + "/demo/",
         "auth_configured": bool(os.getenv("TARGET_PASSWORD") or os.getenv("QA_STORAGE_STATE")),
-        "auth_origin": os.getenv("TARGET_AUTH_ORIGIN", ""), "max_active_runs": 1}
+        "auth_origin": os.getenv("TARGET_AUTH_ORIGIN", ""), "max_active_runs": 1,
+        "runtime": getattr(app.state, "runtime", {"ready": False, "checks": [], "errors": []})}
 
 
 @app.get("/api/runs")
@@ -83,6 +92,10 @@ def find_run(rid):
 
 @app.post("/api/runs", status_code=202)
 async def create_run(request: RunRequest):
+    runtime = getattr(app.state, "runtime", None)
+    if runtime and not runtime["ready"]:
+        error = runtime["errors"][0]
+        raise HTTPException(503, f"{error['code']} at {error['stage']}: {error['message']} {error['remedy']}")
     try: validate_url(request.url)
     except ValueError as exc: raise HTTPException(422, str(exc)) from exc
     if request.mode == "openai" and not os.getenv("OPENAI_API_KEY"):
@@ -92,7 +105,11 @@ async def create_run(request: RunRequest):
     # Never persist configured secrets even if accidentally pasted into scope.
     request.scope = redact(request.scope)
     request.requirements = redact(request.requirements)
-    rid = store.create(request.model_dump())
+    try:
+        rid = store.create(request.model_dump())
+    except OSError as exc:
+        diagnostic = error_details(exc, "run_directory")
+        raise HTTPException(503, f"{diagnostic['code']}: {diagnostic['message']} {diagnostic['remedy']}") from exc
     task = asyncio.create_task(run_pipeline(store, rid))
     tasks[rid] = task
     task.add_done_callback(lambda done: tasks.pop(rid, None))

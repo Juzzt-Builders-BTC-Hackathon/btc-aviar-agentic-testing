@@ -6,6 +6,7 @@ from playwright.async_api import async_playwright
 from .models import RunRequest, Plan
 from .browser import auth_state, execute_flow
 from .safety import validate_url
+from .runtime import launch_browser
 
 
 async def replay(path):
@@ -14,7 +15,7 @@ async def replay(path):
     plan = Plan.model_validate(suite["plan"])
     validate_url(request.url)
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch()
+        browser = await launch_browser(pw)
         try:
             state = await auth_state(browser, request.url)
             results = [await execute_flow(browser, request, f, state) for f in plan.flows]

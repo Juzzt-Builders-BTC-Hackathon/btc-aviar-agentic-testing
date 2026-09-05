@@ -4,6 +4,8 @@ Version 2.0 · 2026-09-05 · Implementation-aligned plan
 
 Current configuration update: `QA_ALLOWED_ORIGINS=*` enables all HTTP(S) target origins. Explicit comma-separated allowlists remain supported. Per-run same-origin browser restrictions and origin-scoped authentication remain in effect. See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed component, sequence, state, artifact and deployment diagrams and the complete technology stack.
 
+Subsequent compatibility update: compatible resource loading now supports external HTTP(S) read resources, with a strict-origin option. Navigation admits canonical www/HTTPS redirects and explicitly added per-run origins. Startup performs real browser/write-access readiness checks and blocks admission on failure. These supersede earlier strict-only resource-loading descriptions below. See [FEATURES.md](FEATURES.md) for the current implemented-feature inventory.
+
 ## 1. Document analysis and decisions
 
 The source research and downloaded architecture proposal identify the essential problem correctly: coordinating exploration, planning, coverage review, generation, execution, repair and evidence. A useful implementation must explain why a test exists, what was actually checked, and what remains unknown.
