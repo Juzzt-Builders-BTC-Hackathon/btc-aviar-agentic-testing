@@ -14,6 +14,21 @@ from qa_agent.store import Store
 LOGIN = {"username": "fixture-user-unique", "password": "fixture-password-unique"}
 
 
+def test_login_defaults_need_only_credentials():
+    request = RunRequest(url="https://example.com/protected", authentication=LOGIN)
+    assert request.authentication.login_path == ""
+    assert request.authentication.username_selector == ""
+    assert request.authentication.success_selector == ""
+
+
+def test_login_errors_have_authentication_remedy():
+    from qa_agent.authentication import LoginError
+    from qa_agent.runtime import error_details
+    detail = error_details(LoginError("Could not identify the username field"), "authentication")
+    assert detail['code'] == 'AUTHENTICATION_FAILED'
+    assert 'browser channel' not in detail['remedy']
+
+
 def test_credentials_are_excluded_from_serialization_and_repr():
     request = RunRequest(url="https://example.com/", authentication=LOGIN)
     assert "authentication" not in request.model_dump()

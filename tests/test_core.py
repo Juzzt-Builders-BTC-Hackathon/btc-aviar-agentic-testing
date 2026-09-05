@@ -9,6 +9,7 @@ from qa_agent.safety import PolicyError, check_action, target_url, validate_url,
 from qa_agent.healing import deterministic_candidate, classify
 from qa_agent.planning import coverage, requirements_list, ground_oracles
 from qa_agent.store import Store
+from qa_agent.planning import unobserved_selectors
 from qa_agent.reporting import reports
 
 
@@ -16,6 +17,36 @@ def flow():
     return Flow(id="test", name="Test", risk="high", category="happy_path", requirement_ids=["REQ-1"], oracle="requirement", steps=[
         Step(action="navigate", target=config.DEMO_ORIGIN+"/demo/", value="", intent="Open"),
         Step(action="assert_text", target="h1", value="Expected", intent="Check requirement")])
+
+
+def test_generated_initial_selector_must_match_page_evidence():
+    scenario = flow()
+    plan = Plan(summary='', flows=[scenario], gaps=[])
+    pages = [{'url': scenario.steps[0].target, 'elements': [{'selector': 'h1'}]}]
+    assert unobserved_selectors(plan, pages) == []
+    scenario.steps[-1].target = 'body > div > div > h1'
+    assert unobserved_selectors(plan, pages)[0]['step'] == 1
+    scenario.steps.insert(1, Step(action='click', target='h1', value='', intent='Open detail'))
+    assert unobserved_selectors(plan, pages) == []  # Later states require browser validation.
+
+
+def test_body_text_assertion_is_grounded_in_document_snapshot():
+    scenario = flow()
+    scenario.steps[-1].target = 'body'
+    plan = Plan(summary='', flows=[scenario], gaps=[])
+    pages = [{'url': scenario.steps[0].target, 'elements': [], 'text': 'Expected'}]
+    assert unobserved_selectors(plan, pages) == []
+    scenario.steps[-1].action = 'assert_visible'
+    assert unobserved_selectors(plan, pages)
+
+
+def test_telemetry_does_not_claim_application_content_missing():
+    plan = Plan(summary='', flows=[flow()], gaps=[])
+    page = {'url': 'https://example.com', 'text': '', 'elements': [],
+            'network_warnings': [{'category': 'telemetry'}]}
+    assert not any('application requests blocked' in g for g in coverage(plan, [page], [{'id':'REQ-1','text':'Expected'}]))
+    page['network_warnings'].append({'category': 'application'})
+    assert any('1 application requests blocked' in g for g in coverage(plan, [page], [{'id':'REQ-1','text':'Expected'}]))
 
 
 def test_contract_rejects_executable_code_and_assertion_free_flows():

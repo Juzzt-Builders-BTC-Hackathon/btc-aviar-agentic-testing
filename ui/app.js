@@ -34,7 +34,7 @@ function renderRuns() {
   $('empty-runs').classList.toggle('hidden',runs.length>0);
   $('run-list').innerHTML=runs.map(r=>{
     const host=new URL(r.request.url).host,s=r.summary;
-    return `<tr><td><div class="run-target"><span class="target-icon" aria-hidden="true">${esc(host.slice(0,1).toUpperCase())}</span><button class="run-link" data-run="${r.id}"><strong>${esc(host)}</strong><small>${r.id.slice(0,8)} · ${r.request.mode==='openai'?'OpenAI':'Baseline'}</small></button></div></td><td>${pill(r.status)}</td><td><span class="result-count">${s.total!==undefined?`${s.passed} / ${s.total} passed`:'—'}</span></td><td class="muted">${time(r.created)}</td><td><button class="text-button" data-run="${r.id}" aria-label="Open run ${r.id.slice(0,8)}">↗</button></td></tr>`;
+    return `<tr><td><div class="run-target"><span class="target-icon" aria-hidden="true">${esc(host.slice(0,1).toUpperCase())}</span><button class="run-link" data-run="${r.id}"><strong>${esc(host)}</strong><small>${r.id.slice(0,8)} · ${r.request.mode==='openai'?'OpenAI':'Baseline'} ? Budget: ${r.request.max_flows}</small></button></div></td><td>${pill(r.status)}</td><td><span class="result-count">${s.total!==undefined?`${s.passed} / ${s.total} passed`:'—'}</span></td><td class="muted">${time(r.created)}</td><td><button class="text-button" data-run="${r.id}" aria-label="Open run ${r.id.slice(0,8)}">↗</button></td></tr>`;
   }).join('');
   const complete=state.runs.filter(r=>r.status==='completed');
   const totals=complete.reduce((a,r)=>({total:a.total+(r.summary.total||0),passed:a.passed+(r.summary.passed||0),healed:a.healed+(r.summary.healed||0),attention:a.attention+(r.summary.failed||0)+(r.summary.blocked||0)}),{total:0,passed:0,healed:0,attention:0});
@@ -111,7 +111,7 @@ $('view-all-runs').onclick=()=>document.querySelector('[data-nav="runs"]').click
 $('run-form').addEventListener('invalid',e=>{if(e.target.closest('.advanced-options'))$('advanced-options').open=true;},true);
 function clearLoginCredentials() {$('login-username').value='';$('login-password').value='';}
 function updateLoginFields() {const enabled=$('use-login').checked;$('login-fields').classList.toggle('hidden',!enabled);$('login-fields').querySelectorAll('input').forEach(input=>{input.disabled=!enabled;input.required=enabled;});if(!enabled)clearLoginCredentials();}
-function loginDetails() {if(!$('use-login').checked)return null;return {username:$('login-username').value,password:$('login-password').value,login_path:$('login-path').value.trim(),username_selector:$('username-selector').value.trim(),password_selector:$('password-selector').value.trim(),submit_selector:$('submit-selector').value.trim(),success_selector:$('success-selector').value.trim()};}
+function loginDetails() {if(!$('use-login').checked)return null;return {username:$('login-username').value,password:$('login-password').value};}
 $('use-login').onchange=updateLoginFields;
 $('run-dialog').addEventListener('close',clearLoginCredentials);
 $('close-dialog').onclick=()=>$('run-dialog').close();$('run-search').oninput=renderRuns;

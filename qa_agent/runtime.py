@@ -10,8 +10,12 @@ from .safety import redact
 
 
 def error_details(exc, stage):
+    from .authentication import LoginError
     message = redact(str(exc))[:1500]
-    if isinstance(exc, PermissionError) or "WinError 5" in message or "Access is denied" in message:
+    if isinstance(exc, LoginError):
+        code = "AUTHENTICATION_FAILED"
+        remedy = "Confirm the website credentials. For MFA, CAPTCHA or external identity providers, configure QA_STORAGE_STATE for this origin."
+    elif isinstance(exc, PermissionError) or "WinError 5" in message or "Access is denied" in message:
         code = "ACCESS_DENIED"
         remedy = ("Start the app from a normal local terminal using start.ps1; restricted agent sandboxes may block browser subprocess pipes. "
             "Confirm your account can write QA_DATA_DIR and QA_BROWSER_TEMP_DIR and execute the Playwright driver/browser. "

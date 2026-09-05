@@ -36,8 +36,6 @@ async def main():
                 await page.locator("#use-login").check()
                 await page.locator("#login-username").fill(credentials.username.get_secret_value())
                 await page.locator("#login-password").fill(credentials.password.get_secret_value())
-                for field in ("login_path", "username_selector", "password_selector", "submit_selector", "success_selector"):
-                    await page.locator("#" + field.replace("_", "-")).fill(getattr(credentials, field))
                 await page.locator("#max-pages").fill("1")
                 await page.locator("#max-flows").fill("1")
                 async with page.expect_response(lambda response: response.url.endswith("/api/runs") and response.request.method == "POST") as pending:

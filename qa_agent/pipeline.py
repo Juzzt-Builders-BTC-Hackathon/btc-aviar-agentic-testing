@@ -7,17 +7,26 @@ from .browser import auth_state, crawl, execute_flow
 from .healing import deterministic_candidate, semantic_match
 from .llm import LLM
 from .models import RunRequest
-from .planning import baseline_plan, coverage, requirements_list, ground_oracles, prd_requirements
+from .planning import baseline_plan, coverage, requirements_list, ground_oracles, prd_requirements, unobserved_selectors
 from .reporting import reports
 from .safety import redact, target_url
 from .runtime import launch_browser, error_details
-from .evolution import previous_suite, page_changes, remap_requirements, merge_plan, outcome_changes, suite_key
+from .evolution import previous_suite, page_changes, remap_requirements, merge_plan, outcome_changes, suite_key, should_extend_suite
 from .triage import triage_flow, defect_report
 
 
 def fingerprint_key(url, flow, index):
     step = flow.steps[index]
     return hashlib.sha256(f"{url}|{flow.name}|{index}|{step.intent}".encode()).hexdigest()
+
+
+def remember_fingerprints(store, url, flow, result):
+    """A successful step is evidence even when a later assertion fails."""
+    if result.get('attempt') == 'healed' and result.get('status') != 'passed':
+        return  # An unverified proposal must not update repair memory.
+    for step in result.get('steps', []):
+        if step.get('status') == 'passed' and step.get('fingerprint'):
+            store.fingerprint(fingerprint_key(url, flow, step['index']), step['fingerprint'])
 
 
 def export_suite(store, rid, request, plan):
@@ -53,14 +62,21 @@ async def run_pipeline(store, rid, authentication=None):
                                  "ui_changes": changes, "reused": [], "added": [], "deferred": [], "outcomes": []}
                     retained = remap_requirements(previous["plan"].model_copy(deep=True), previous["requirements"], requirements) if previous else None
                     if retained:
+                        failed = {r['flow_id'] for r in previous['results'] if r['status'] != 'passed'}
+                        invalid = {i['flow_id'] for i in unobserved_selectors(retained, previous['pages'])} & failed
+                        evolution['invalidated'] = sorted(invalid)
+                        if invalid:
+                            retained.flows = [f for f in retained.flows if f.id not in invalid]
+                            event('plan', f"Discarding {len(invalid)} previously failed generated scenarios with selectors absent from their original page evidence; regenerating coverage.")
+                            if not retained.flows: retained = None
+                    if retained:
                         evolution["reused"] = [f.id for f in retained.flows]
                         event("plan", f"Reusing {len(retained.flows)} existing scenarios from {previous['id'][:8]}; original assertions retained.")
                     store.artifact(rid, "requirements.json", requirements)
                     event("plan", "Generating evidence-grounded scenarios with OpenAI." if request.mode == "openai" else "Generating a deterministic baseline; no AI calls are made.")
                     limit = max(request.max_flows, len(retained.flows) if retained else 0)
-                    prd_changed = previous and previous["requirements"] != requirements
                     pending = coverage(retained, pages, requirements) if retained else []
-                    should_extend = not retained or bool(changes) or prd_changed or any("no planned test" in g for g in pending)
+                    should_extend = should_extend_suite(request, previous, retained, changes, requirements, pending)
                     if retained and (not should_extend or len(retained.flows) >= limit):
                         plan = retained
                         if should_extend:
@@ -80,11 +96,26 @@ async def run_pipeline(store, rid, authentication=None):
                     event("coverage", "Checking requirement links, assertions and missing negative paths before generation.")
                     gaps = coverage(plan, pages, requirements)
                     fixable = [g for g in gaps if "no planned test" in g or "no negative" in g or "Business journeys" in g]
+                    if len(plan.flows) < request.max_flows:
+                        fixable.append(f"Requested up to {request.max_flows} scenarios, but the plan contains {len(plan.flows)}. Return a complete plan with distinct supported scenarios; explain any evidence-based shortfall.")
                     if fixable and request.mode == "openai" and retained is None:
                         event("plan", "Coverage gaps triggered one bounded re-plan.")
                         plan = await llm.plan(pages, request, requirements, fixable)
                         plan.flows = plan.flows[:request.max_flows]
                         gaps = coverage(plan, pages, requirements)
+                    issues = [i for i in unobserved_selectors(plan, pages) if i['flow_id'] not in evolution['reused']]
+                    if issues and request.mode == 'openai' and retained is None:
+                        event('plan', 'Correcting generated selectors that were not present in the observed page evidence.')
+                        plan = await llm.plan(pages, request, requirements, ["Return the complete corrected plan. Copy selectors exactly from the corresponding observed page.", json.dumps(issues)])
+                        plan.flows = plan.flows[:request.max_flows]
+                        issues = unobserved_selectors(plan, pages)
+                        gaps = coverage(plan, pages, requirements)
+                    if issues:
+                        store.artifact(rid, 'locator_warnings.json', issues)
+                        event('validate', f"{len(issues)} generated selectors lack an exact snapshot match; browser validation will check uniqueness and visibility before use.")
+                        gaps.append(f"{len(issues)} generated selectors lack exact snapshot matches. Inspect locator_warnings.json and per-step browser validation; unknown identity cannot be automatically healed.")
+                    if len(plan.flows) < request.max_flows:
+                        gaps.append(f"Generated {len(plan.flows)} of the requested maximum {request.max_flows} scenarios. The remaining budget was not filled with supported distinct scenarios.")
                     gaps.extend(ground_oracles(plan, requirements))
                     for flow in plan.flows:
                         for step in flow.steps:
@@ -100,6 +131,7 @@ async def run_pipeline(store, rid, authentication=None):
                     validation = []
                     for flow in plan.flows:
                         result = await execute_flow(browser, request, flow, state, store.root / rid, "validation")
+                        remember_fingerprints(store, request.url, flow, result)
                         validation.append(result)
                         store.artifact(rid, "validation_report.json", validation)
                         event("validate", f"{flow.name}: {result['status']}")
@@ -107,18 +139,17 @@ async def run_pipeline(store, rid, authentication=None):
                     event("execute", "Executing validated flows in fresh browser contexts.")
                     for flow, validated in zip(plan.flows, validation):
                         async def execute(candidate, attempt):
-                            return await execute_flow(browser, request, candidate, state, store.root / rid, attempt)
+                            attempt_result = await execute_flow(browser, request, candidate, state, store.root / rid, attempt)
+                            remember_fingerprints(store, request.url, candidate, attempt_result)
+                            return attempt_result
                         async def propose(candidate, failure):
                             return await repair(store, request, candidate, failure, pages, llm)
                         result, audits = await triage_flow(flow, validated, execute, propose, event)
                         heals.extend(audits)
-                        if result.get("diagnostics"):
-                            gaps.append(f"{flow.name}: {len(result['diagnostics'])} browser/HTTP warning(s) observed; inspect diagnostics even if UI assertions passed.")
-                        if result["status"] == "passed":
-                            for step_result in result.get("healed_attempt", result)["steps"]:
-                                if step_result.get("fingerprint"):
-                                    store.fingerprint(fingerprint_key(request.url, flow, step_result["index"]), step_result["fingerprint"])
-                        else: gaps.append(f"{flow.name}: {result['status']} — scenario not verified.")
+                        application_diagnostics = [d for d in result.get('diagnostics', []) if d.get('category') != 'telemetry']
+                        if application_diagnostics:
+                            gaps.append(f"{flow.name}: {len(application_diagnostics)} browser/HTTP warning(s) observed; inspect diagnostics even if UI assertions passed.")
+                        if result["status"] != "passed": gaps.append(f"{flow.name}: {result['status']} — scenario not verified.")
                         results.append(result)
                         store.artifact(rid, "run_results.json", results)
                         store.artifact(rid, "heal_log.json", heals)
@@ -133,7 +164,7 @@ async def run_pipeline(store, rid, authentication=None):
                     store.artifact(rid, "coverage_gaps.json", gaps)
                     store.artifact(rid, "classifications.json", [{"flow_id": r["flow_id"], **r["classification"]} for r in results])
                     summary = reports(store, rid, request, plan, results, gaps, heals, requirements, llm.usage())
-                    summary.update(reused=len(evolution["reused"]), added=len(evolution["added"]),
+                    summary.update(requested_max_flows=request.max_flows, reused=len(evolution["reused"]), added=len(evolution["added"]),
                                    regressions=sum(c["change"] == "regression" for c in evolution["outcomes"]),
                                    ui_changes=len(changes), previous_run=evolution["previous_run"])
                 finally: await browser.close()
@@ -159,8 +190,12 @@ async def repair(store, request, flow, result, pages, llm):
     index = result["failed_step"]
     step = flow.steps[index]
     old = store.fingerprint(fingerprint_key(request.url, flow, index))
+    page_url = result.get('failure_snapshot', {}).get('url')
+    if old and old.get('page_url') and page_url and old['page_url'] != page_url:
+        old = None
     if not old:
-        old = next((e for p in pages for e in p["elements"] if e["selector"] == step.target), None)
+        observations = [e for p in pages if p.get('url') == page_url for e in p['elements'] if e['selector'] == step.target]
+        if len(observations) == 1: old = observations[0]
     audit = {"flow_id": flow.id, "step": index, "old_selector": step.target, "verified": False}
     scoped = result.get("scoped_regeneration")
     if scoped and result.get("attempt") == "validation":

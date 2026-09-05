@@ -9,11 +9,11 @@ class StrictModel(BaseModel):
 class LoginCredentials(StrictModel):
     username: SecretStr = Field(min_length=1, max_length=1000)
     password: SecretStr = Field(min_length=1, max_length=1000)
-    login_path: str = Field(default="/", min_length=1, max_length=2000)
-    username_selector: str = Field(default='[data-test="username"]', min_length=1, max_length=500)
-    password_selector: str = Field(default='[data-test="password"]', min_length=1, max_length=500)
-    submit_selector: str = Field(default='[data-test="login-button"]', min_length=1, max_length=500)
-    success_selector: str = Field(default='[data-test="inventory-container"]', min_length=1, max_length=500)
+    login_path: str = Field(default="", max_length=2000)
+    username_selector: str = Field(default="", max_length=500)
+    password_selector: str = Field(default="", max_length=500)
+    submit_selector: str = Field(default="", max_length=500)
+    success_selector: str = Field(default="", max_length=500)
 
 
 class RunRequest(StrictModel):

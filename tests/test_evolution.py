@@ -5,6 +5,7 @@ from qa_agent.models import RunRequest, Plan, Flow, Step
 from qa_agent.evolution import merge_plan, remap_requirements, previous_suite, page_changes, outcome_changes
 from qa_agent.planning import prd_requirements
 from qa_agent.store import Store
+from qa_agent.evolution import should_extend_suite
 from qa_agent.triage import triage_flow, defect_report
 
 
@@ -12,6 +13,30 @@ def scenario():
     return Flow(id="original", name="Cart", risk="high", category="happy_path", oracle="requirement",
         requirement_ids=["PRD-1"], steps=[Step(action="navigate", target="https://example.com/", value="", intent="Open"),
         Step(action="assert_text", target="#old", value="Cart", intent="Check title")])
+
+
+def test_increased_budget_extends_unchanged_suite():
+    request = RunRequest(url='https://example.com/', max_flows=6)
+    previous = {'request': request.model_copy(update={'max_flows': 1}), 'requirements': []}
+    retained = Plan(summary='', flows=[scenario()], gaps=[])
+    assert should_extend_suite(request, previous, retained, [], [], [])
+    previous['request'] = request
+    assert not should_extend_suite(request, previous, retained, [], [], [])
+    assert should_extend_suite(request, None, None, [], [], [])
+
+
+def test_planner_receives_remaining_budget_and_complete_replan_instruction():
+    from unittest.mock import AsyncMock
+    from qa_agent.llm import LLM
+    request = RunRequest(url='https://example.com/', max_flows=6)
+    retained = Plan(summary='', flows=[scenario()], gaps=[])
+    llm = LLM()
+    llm.ask = AsyncMock(return_value=retained)
+    asyncio.run(llm.plan([], request, [], existing=retained))
+    assert llm.ask.call_args.args[2]['max_flows'] == 5
+    asyncio.run(llm.plan([], request, [], feedback=['Coverage gap']))
+    assert llm.ask.call_args.args[2]['max_flows'] == 6
+    assert 'COMPLETE plan' in llm.ask.call_args.args[1]
 
 
 def test_markdown_contract_and_block_traceability():

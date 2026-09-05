@@ -3,18 +3,25 @@ import time
 from urllib.parse import urlsplit
 from playwright.async_api import expect
 from .safety import PolicyError, origin, target_url, check_action, redact, request_block_reason
+from .authentication import sign_in, LoginError, AuthenticatedState
 
 # Input values and hidden fields are deliberately excluded from the observation.
 SNAPSHOT = r"""() => {
  const nodes = [...document.querySelectorAll('a,button,input,select,textarea,h1,h2,h3,[role="alert"],[data-testid],[data-test]')];
- const elements = nodes.filter(e => e.getClientRects().length).slice(0,100).map(e => {
+ const visible = [...new Set(nodes)].filter(e => e.getClientRects().length);
+ const priority = e => e.closest('main,[role="main"]') ? 0 : /^H[123]$/.test(e.tagName) ? 1 : 2;
+ const elements = visible.sort((a,b)=>priority(a)-priority(b)).slice(0,160).map(e => {
    const attr = k => e.getAttribute(k) || '';
    const q = s => JSON.stringify(s);
    let selector = attr('data-testid') ? '[data-testid='+q(attr('data-testid'))+']' :
      attr('data-test') ? '[data-test='+q(attr('data-test'))+']' : e.id ? '#'+CSS.escape(e.id) :
      attr('name') ? e.tagName.toLowerCase()+'[name='+q(attr('name'))+']' :
      attr('aria-label') ? '[aria-label='+q(attr('aria-label'))+']' : '';
-   if (!selector || document.querySelectorAll(selector).length !== 1) {
+   const tag = e.tagName.toLowerCase();
+   const candidates = [selector, attr('placeholder') ? tag+'[placeholder='+q(attr('placeholder'))+']' : '',
+     attr('href') ? tag+'[href='+q(attr('href'))+']' : '', /^h[123]$/.test(tag) ? tag : ''];
+   selector = candidates.find(s => s && document.querySelectorAll(s).length === 1) || '';
+   if (!selector) {
      let n=e, parts=[];
      while(n && n.tagName !== 'BODY') {
        const tag=n.tagName.toLowerCase(), siblings=[...n.parentElement.children].filter(x=>x.tagName===n.tagName);
@@ -34,6 +41,19 @@ SNAPSHOT = r"""() => {
 async def snapshot(page):
     import json
     return json.loads(redact(json.dumps(await page.evaluate(SNAPSHOT))))
+
+
+async def wait_for_page_content(page):
+    """Give SPA data and loading indicators a bounded chance to settle."""
+    await page.locator('body').wait_for()
+    try:
+        await page.wait_for_load_state('networkidle', timeout=10000)
+    except Exception:
+        pass  # Polling sites may never become idle.
+    try:
+        await expect(page.locator('[role="progressbar"]:visible,[aria-busy="true"]:visible')).to_have_count(0, timeout=5000)
+    except AssertionError:
+        pass  # Remaining loading state is retained in page evidence.
 
 
 async def scope_ambiguous_selector(page, target, anchor):
@@ -69,7 +89,11 @@ async def new_context(browser, base, interactions=False, state=None, resource_po
         reason = request_block_reason(base, request.url, request.method, main_navigation, interactions, resource_policy, navigation_origins)
         if reason:
             if len(context.qa_network_log) < 50:
-                context.qa_network_log.append({"type": "blocked_request", "path": urlsplit(request.url).path, "reason": reason})
+                host = urlsplit(request.url).hostname or ''
+                telemetry = any(host == domain or host.endswith('.' + domain) for domain in ('google-analytics.com', 'clarity.ms'))
+                context.qa_network_log.append({"type": "blocked_request", "host": host, "method": request.method,
+                                              "path": urlsplit(request.url).path, "reason": reason,
+                                              "category": "telemetry" if telemetry else "application"})
             return await route.abort()
         await route.continue_()
     await context.route("**/*", route_request)
@@ -90,23 +114,35 @@ async def auth_state(browser, base, credentials=None):
     context = await new_context(browser, base, interactions=True)
     try:
         page = await context.new_page()
-        login_url = target_url(base, setting("login_path", "TARGET_LOGIN_PATH", "/"))
-        if origin(login_url) != origin(base): raise PolicyError("Login URL must use the application origin")
-        await page.goto(login_url, wait_until="domcontentloaded")
-        if origin(page.url) != origin(base): raise PolicyError("Login redirected outside the application origin")
-        await page.locator(setting("username_selector", "TARGET_USERNAME_SELECTOR", '[data-test="username"]')).fill(username)
-        await page.locator(setting("password_selector", "TARGET_PASSWORD_SELECTOR", '[data-test="password"]')).fill(password)
-        await page.locator(setting("submit_selector", "TARGET_SUBMIT_SELECTOR", '[data-test="login-button"]')).click()
-        await expect(page.locator(setting("success_selector", "TARGET_SUCCESS_SELECTOR", '[data-test="inventory-container"]'))).to_be_visible(timeout=15000)
-        return await context.storage_state()
-    except Exception:
-        raise ValueError("Website login failed. Check credentials, login selectors, and the signed-in success element. SSO, MFA and CAPTCHA need a pre-authenticated storage state.") from None
+        settings = {field: setting(field, 'TARGET_' + field.upper(), '') for field in
+                    ('login_path', 'username_selector', 'password_selector', 'submit_selector', 'success_selector')}
+        login_url, signed_in_url = await sign_in(page, base, username, password, settings)
+        state = await context.storage_state()
+        # Verify the state that crawl and execution will actually receive.
+        verification = await new_context(browser, base, state=state)
+        try:
+            check = await verification.new_page()
+            await check.goto(target_url(base, signed_in_url), wait_until='domcontentloaded')
+            await check.wait_for_timeout(2000)
+            if settings['success_selector']:
+                await expect(check.locator(settings['success_selector'])).to_be_visible(timeout=15000)
+            elif (check.url != signed_in_url or await check.locator('input[type="password"]:visible').count()
+                  or not (await check.locator('body').inner_text()).strip()):
+                raise LoginError("Sign-in did not persist in a fresh browser session. The website may require a pre-authenticated storage state.")
+        except LoginError:
+            raise
+        except Exception as exc:
+            raise LoginError(f"Website login failed while verifying session reuse ({type(exc).__name__}).") from None
+        finally:
+            await verification.close()
+        return AuthenticatedState(state, login_url, signed_in_url)
     finally: await context.close()
 
 
 async def crawl(browser, request, state, event):
     context = await new_context(browser, request.url, state=state, resource_policy=request.resource_policy, navigation_origins=request.navigation_origins)
-    pages, queue, seen = [], [request.url], set()
+    start_url = state.landing_url if isinstance(state, AuthenticatedState) and request.url == state.login_url else request.url
+    pages, queue, seen = [], [start_url], set()
     failures = []
     try:
         page = await context.new_page()
@@ -118,11 +154,12 @@ async def crawl(browser, request, state, event):
                 target_url(request.url, url, request.navigation_origins)
                 context.qa_network_log.clear()
                 response = await page.goto(url, wait_until="domcontentloaded")
-                await page.locator("body").wait_for()
-                try: await page.wait_for_load_state("load", timeout=5000)
-                except Exception: pass
-                await page.wait_for_timeout(800)
+                await wait_for_page_content(page)
                 data = await snapshot(page)
+                final_url = data['url'].split('#')[0]
+                if any(p['url'].split('#')[0] == final_url for p in pages):
+                    continue
+                seen.add(final_url)
                 data["http_status"] = response.status if response else None
                 data["network_warnings"] = list(context.qa_network_log)
                 data["limitations"] = []
@@ -159,6 +196,7 @@ async def execute_flow(browser, request, flow, state, folder=None, attempt="run"
             check_action(step, request.allow_interactions)
             if step.action == "navigate":
                 response = await page.goto(target_url(request.url, step.target, request.navigation_origins), wait_until="domcontentloaded")
+                await wait_for_page_content(page)
                 # A SPA can render its intended state after an HTTP error response.
                 # HTTP errors remain separate diagnostics; evaluate the declared UI oracle.
             elif step.action == "assert_url":
@@ -169,8 +207,15 @@ async def execute_flow(browser, request, flow, state, folder=None, attempt="run"
                 locator = page.locator(step.target)
                 await expect(locator).to_have_count(1)
                 await expect(locator).to_be_visible()
-                before = await snapshot(page)
-                fingerprint = next((e for e in before["elements"] if e["selector"] == step.target), None)
+                # Capture the resolved element, even when the step uses a valid
+                # selector alias different from the snapshot's preferred selector.
+                fingerprint = await locator.evaluate("""e => {
+                    const attr = k => e.getAttribute(k) || '';
+                    return {tag:e.tagName.toLowerCase(), type:attr('type'), name:attr('name'),
+                        text:(e.innerText || attr('aria-label') || attr('placeholder')).trim().slice(0,160),
+                        testid:attr('data-testid') || attr('data-test'), role:attr('role'), href:attr('href')};
+                }""")
+                fingerprint.update(selector=step.target, page_url=page.url)
                 if step.action == "fill":
                     if await locator.get_attribute("type") == "password": raise PolicyError("Use the configured authenticated session for passwords")
                     await locator.fill(step.value)

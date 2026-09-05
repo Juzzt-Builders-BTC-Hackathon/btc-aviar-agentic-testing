@@ -33,6 +33,12 @@ def previous_suite(store, request):
     return None
 
 
+def should_extend_suite(request, previous, retained, changes, requirements, gaps):
+    return (not retained or bool(changes) or previous['requirements'] != requirements
+            or any('no planned test' in gap for gap in gaps)
+            or request.max_flows > previous['request'].max_flows)
+
+
 def page_changes(old, new):
     before = {canonical_url(p["url"]): p for p in old}
     after = {canonical_url(p["url"]): p for p in new}

@@ -57,7 +57,7 @@ def baseline_plan(pages, limit):
             elements = [{"selector": "body", "text": page["text"].strip().splitlines()[0][:160]}]
         if not elements: continue
         element = elements[0]
-        flows.append(Flow(id=f"smoke_{len(flows)+1}", name=f"Page baseline: {page['title'] or page['url']}",
+        flows.append(Flow(id=f"smoke_{len(flows)+1}", name=f"Page baseline: {element['text'][:100]} ({page['url']})",
             risk="medium", category="smoke", requirement_ids=[], oracle="observed", steps=[
                 Step(action="navigate", target=page["url"], value="", intent="Open observed page"),
                 Step(action="assert_text", target=element["selector"], value=element["text"], intent="Verify observed page content remains visible")]))
@@ -74,7 +74,8 @@ def coverage(plan, pages, requirements):
     gaps = list(plan.gaps)
     for page in pages:
         gaps.extend(page.get("limitations", []))
-        if page.get("network_warnings"): gaps.append(f"{page['url']}: {len(page['network_warnings'])} requests blocked by the run policy; some content may be missing.")
+        blocked = [w for w in page.get('network_warnings', []) if w.get('category') != 'telemetry']
+        if blocked: gaps.append(f"{page['url']}: {len(blocked)} application requests blocked by the run policy; some content may be missing. See recon.json for host, method and reason.")
         if page.get("crawl_failures"): gaps.append(f"{len(page['crawl_failures'])} pages could not be explored; see recon.json for causes.")
     for req in requirements:
         if req["id"] not in linked: gaps.append(f"{req['id']}: no planned test — {req['text']}")
@@ -86,3 +87,24 @@ def coverage(plan, pages, requirements):
         gaps.append("Possible CAPTCHA/2FA: automated bypass is unsupported; supply an authenticated test session.")
     gaps.append("Coverage is bounded to discovered pages and supplied requirements; undiscovered flows remain unassessed.")
     return list(dict.fromkeys(gaps))
+
+
+def unobserved_selectors(plan, pages):
+    """Check initial page controls against evidence, before any UI-changing action."""
+    lookup = {}
+    for page in pages:
+        lookup.setdefault(page['url'], set()).update(e['selector'] for e in page['elements'])
+    issues = []
+    for flow in plan.flows:
+        selectors = None
+        for index, step in enumerate(flow.steps):
+            if step.action == 'navigate':
+                selectors = lookup.get(step.target)
+            elif selectors is not None and step.action != 'assert_url':
+                if step.target == 'body' and step.action == 'assert_text':
+                    continue  # The document body is included as page text in every snapshot.
+                if step.target not in selectors:
+                    issues.append({'flow_id': flow.id, 'step': index, 'selector': step.target})
+                if step.action in {'click', 'fill'}:
+                    selectors = None
+    return issues

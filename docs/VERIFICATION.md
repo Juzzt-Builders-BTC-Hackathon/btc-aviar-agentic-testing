@@ -6,6 +6,7 @@ Date: **2026-09-05**. Verified environment: Windows, Python 3.12, Playwright 1.5
 
 | Check | Observed result | Evidence |
 |---|---|---|
+| `-m scripts.verify_healing` | Real-browser selector drift, locator aliases, verified repair reuse, and rejection of assertion rewrites or ambiguous/missing identity | Chromium; synthetic pages only, no model calls |
 | Unit/API/lifecycle suite | **36 passed** in the final test run | `python -m pytest -q`; includes export, PRD contract, suite lineage, retry and repair-invariant tests |
 | Controlled locator drift | Failed old locator repaired; full flow passed with original assertion | [Browser evolution record](evidence/browser-evolution.json) |
 | Repaired-suite reuse | Subsequent run reused the verified selector without planning calls | Same four-run browser fixture |
