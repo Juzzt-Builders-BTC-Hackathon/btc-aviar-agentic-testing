@@ -237,7 +237,9 @@ Other targeted checks cover local interactions, network compatibility and authen
 
 `QA_ALLOWED_ORIGINS=*` admits HTTP(S) targets. Authentication, CAPTCHA/MFA, cross-domain journeys, dynamic state, canvas and inaccessible content can still limit testing. Compatible loading supports external read resources; navigation remains constrained. Additional navigation origins remain an API compatibility option, not a dashboard field.
 
-For SauceDemo, use `https://www.saucedemo.com/inventory.html`, set credentials privately in `.env`, and retain `TARGET_AUTH_ORIGIN=https://www.saucedemo.com`. The example selectors match that login. Other sites need their own login selectors or `QA_STORAGE_STATE`. No credentials are committed.
+For SauceDemo, use `https://www.saucedemo.com/inventory.html`. Open **New test run → Advanced details → Sign in before testing** and enter the username and password. The default login path and selectors match SauceDemo; other sites need their own login path, username/password selectors, submit selector, and an element visible only after successful login. Login must stay on the application origin. Credentials are held for the run, excluded from saved requests and exports, and must be re-entered for repeat runs. Login runs independently of the test interaction checkbox. MFA, CAPTCHA and SSO require a pre-authenticated `QA_STORAGE_STATE`.
+
+Alternatively, set credentials privately in `.env` with `TARGET_AUTH_ORIGIN=https://www.saucedemo.com`, `TARGET_USERNAME`, `TARGET_PASSWORD`, and the `TARGET_LOGIN_PATH` / `TARGET_*_SELECTOR` settings. This remains the fallback when per-run sign-in is unchecked and is used by exported replay scripts. No credentials are committed. Authenticated page content and screenshots may still contain account data.
 
 Limits: **one local user, one active run, Chromium, ten minutes, five logical model calls**. Each SDK call can retry once. A failed scenario gets one unchanged execution retry and at most one locator repair with confirmation. Interactions can repeat during validation and retry; use resettable test data. Payments, destructive actions and order completion are blocked by the current policy.
 
