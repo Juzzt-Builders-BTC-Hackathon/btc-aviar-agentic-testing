@@ -11,114 +11,57 @@ The focus is maintaining useful tests as a website changes. Repeat runs retain s
 The pipeline runs **nine sequential stages**. Each stage is a distinct agent decision point — Python code controls every transition; OpenAI is called only for planning and constrained locator repair.
 
 ```mermaid
-flowchart TB
-    User(["👤 QA Engineer / Developer\n(URL · PRD · Scope · Interaction policy)"])
+flowchart LR
+    User(["👤 QA Engineer\nURL·PRD·Scope·Policy"])
 
-    subgraph Dashboard["🖥️ Dashboard  —  HTML / CSS / Vanilla JS  (ui/)"]
-        UI_Submit["Submit run\nPOST /api/runs"]
-        UI_Poll["Poll every 2 s\nGET /api/runs/:id"]
-        UI_Results["Results · Planner · Decision log\nPRD coverage · Defect Classifier\nChanges & repairs · Artifacts · Export ZIP"]
+    subgraph Dashboard["🖥️ Dashboard (ui/)"]
+        UI["Submit run · Poll 2s\nResults·Planner·Decision log\nPRD coverage·Defects·Export ZIP"]
     end
 
-    subgraph Backend["🐍 Python Backend  —  FastAPI + Uvicorn  ·  port 8765  (qa_agent/)"]
-
-        subgraph Gate["Entry Gate  (server.py · safety.py · models.py)"]
-            API["REST API\nserver.py"]
-            Admit["Admission guard\n— one active run —"]
-            Policy["Policy gate\nURL allow-list · action DSL\ndestructive/payment block"]
-            Contracts["Pydantic contracts\nRunRequest · Plan · Flow · Step\nHealProposal"]
-        end
-
-        subgraph Orchestrator["Meta-Orchestrator  (pipeline.py · triage.py)"]
-            direction TB
-
-            ExploreAgent["1️⃣  Explorer Agent\nbrowser.py · crawl()\n─────────────────\nTools: Playwright page.goto\n  DOM SNAPSHOT JS (elements · text · links)\n  network route logger\n  auth_state() — storage_state\nOutputs: recon.json"]
-
-            PlannerAgent["2️⃣  Planner Agent\nplanning.py · evolution.py · llm.py\n─────────────────\nTools: previous_suite() — SQLite history\n  remap_requirements() — PRD delta\n  merge_plan() — dedup by signature\n  llm.plan() → OpenAI Responses API\n  baseline_plan() — deterministic fallback\nOutputs: requirements.json · plan.initial.json\n         suite_evolution.json"]
-
-            CoverageAgent["3️⃣  Coverage Checker\nplanning.py · coverage()\n─────────────────\nTools: requirement-link audit\n  ground_oracles() — quoted-literal check\n  gap detector (negative/boundary/business)\nOutputs: coverage_gaps.json · plan.json\n  ➜ triggers one bounded re-plan if fixable gaps"]
-
-            GenAgent["4️⃣  Generator\npipeline.py · export_suite()\n─────────────────\nTools: Pydantic Plan→JSON serialiser\n  suite.json + generated_tests.py writer\nAction DSL: navigate · fill · click\n  assert_text · assert_url · assert_visible\nOutputs: suite.json · generated_tests.py"]
-
-            ValidateAgent["5️⃣  Validator\nbrowser.py · execute_flow(attempt=validation)\n─────────────────\nTools: Playwright locator.expect × 1 per flow\n  scope_ambiguous_selector() — nth-of-type scoping\n  DOM fingerprint capture\nOutputs: validation_report.json\n  scoped_regeneration hint on selector miss"]
-
-            ExecuteAgent["6️⃣  Executor\nbrowser.py · execute_flow(attempt=run)\n─────────────────\nTools: Playwright fresh context per flow\n  page_error · HTTP-error diagnostics listener\n  screenshot capture (masked inputs)\n  PolicyError → blocked classification\nOutputs: run_results.json · *.png screenshots"]
-
-            TriageAgent["7️⃣  Triage / Retry Node\ntriage.py · triage_flow()\n─────────────────\nTools: execute_flow(attempt=retry) — 1 unchanged replay\n  failure_kind detector (selector · assertion · execution)\n  agent_decisions transition log\nOutputs: retry result · transitions log"]
-
-            HealerAgent["8️⃣  Healer Agent\nhealing.py · pipeline.py · repair()\n─────────────────\nTools: store.fingerprint() — SHA-256 element key\n  deterministic_candidate() — similarity ≥ 0.85\n  semantic_match() — tag + text/name/testid guard\n  llm.heal() → OpenAI (only if deterministic fails)\n  execute_flow(attempt=healed) — full-flow confirmation\n  identity gate: repairs limited to the failed locator only\nOutputs: heal_log.json · updated suite.json"]
-
-            ClassifyAgent["9️⃣  Defect Classifier\nhealing.py · classify() + triage.py · defect_report()\n─────────────────\nTools: outcome labels:\n  passed · healed_ok · flaky_test\n  likely_defect · needs_review\n  environment_issue · blocked\n  issue_type + next_action fields\nOutputs: classifications.json · defect_report.json"]
-
-            Reporter["📋  Quality Reporter\nreporting.py · reports()\n─────────────────\nTools: suite_evolution.json merger\n  traceability.json (PRD→scenario→result)\n  HTML / Markdown / JUnit XML renderer\n  evidence ZIP builder (START_HERE.md)\nOutputs: report.md · report.html · junit.xml\n         decision_log.json · export.zip"]
-        end
-
-        LLMAdapter["🤖  LLM Adapter  (llm.py)\nAsyncOpenAI.responses.parse\nmodel: gpt-5.4-mini (configurable)\nmax 5 calls/run · 1 retry · 6500 output tokens\nllm.plan()  —  business-flow test plan\nllm.heal()  —  constrained locator repair"]
-
-        Store["🗄️  Store  (store.py)\nSQLite WAL: runs · events · fingerprints\nArtifact filesystem: data/<run-id>/\nread() · artifact() · fingerprint()"]
-
-        Runtime["⚙️  Runtime  (runtime.py · config.py)\nlaunch_browser() — readiness probe\nerror_details() — diagnostic capture\npython-dotenv .env loader"]
+    subgraph Gate["Entry Gate (server.py/safety.py)"]
+        API["REST API + Admission guard\n+ Policy gate + Pydantic contracts"]
     end
 
-    subgraph BrowserExec["🌐 Isolated Browser Execution  (Playwright subprocess)"]
-        Chromium["Headless Chromium\n1440×1000 viewport\nservice_workers: block\naccept_downloads: false"]
-        Contexts["Fresh context per flow\n5 s element timeout · 20 s nav timeout\nnetwork route logger\norigin-scoped auth storage state"]
+    subgraph Orchestrator["Meta-Orchestrator (pipeline.py/triage.py)"]
+        direction TB
+        Plan["1️⃣-3️⃣ Explore→Plan→Coverage\nDOM snapshot JS · network logger · auth_state()\nprevious_suite() history · remap_requirements()\nmerge_plan() dedup · baseline_plan() fallback\nground_oracles() · gap detector · 1 bounded re-plan\n➜recon/requirements/plan/coverage_gaps.json"]
+        Gen["4️⃣-5️⃣ Generate→Validate\nAction DSL: navigate·fill·click·assert_text/url/visible\nlocator.expect · scope_ambiguous_selector() nth-scoping\nDOM fingerprint · scoped_regeneration hint\n➜suite.json·generated_tests.py·validation_report.json"]
+        Exec["6️⃣-7️⃣ Execute→Triage/Retry\nFresh context/flow · page_error/HTTP-error listener\nscreenshot capture (masked inputs) · PolicyError→blocked\n1 unchanged retry replay · failure_kind detector\nagent_decisions transition log\n➜run_results.json·*.png·retry result"]
+        Heal["8️⃣-9️⃣ Heal→Classify\nfingerprint() SHA-256 key · deterministic_candidate ≥0.85\nsemantic_match() tag+text/name/testid guard\nidentity gate: only failed locator repaired\nfull-flow confirm run · labels: passed/healed_ok/flaky/\nlikely_defect/needs_review/environment_issue/blocked\n+issue_type & next_action\n➜heal_log.json·classifications.json·defect_report.json"]
+        Rep["📋 Reporter\nsuite_evolution merge · traceability.json (PRD→scenario→result)\nHTML/Markdown/JUnit XML render · evidence ZIP + START_HERE.md\n➜report.md/html·junit.xml·decision_log.json·export.zip"]
+        Plan --> Gen --> Exec --> Heal --> Rep
     end
 
-    subgraph ExtStorage["💾 Local Storage  (data/)"]
-        SQLite[("SQLite WAL\nqa.sqlite3\nruns · events · fingerprints")]
-        Artifacts["Per-run artifacts\nrecon.json · plan.json · suite.json\nrun_results.json · heal_log.json\nclassifications.json · defect_report.json\nreport.html · junit.xml · *.png · export.zip"]
+    subgraph AI["🤖 LLM Adapter (llm.py)"]
+        LLM["gpt-5.4-mini via OpenAI\nllm.plan() · llm.heal()\n5 calls/run cap"]
     end
 
-    OpenAI(["☁️  OpenAI Responses API\ngpt-5.4-mini (default)\nStructured output — Plan / HealProposal"])
-    TargetApp(["🌍  Target Application\nHTTP/S — any origin admitted by QA_ALLOWED_ORIGINS"])
-    Env["🔑  .env\nOPENAI_API_KEY · OPENAI_MODEL\nQA_ALLOWED_ORIGINS\nTARGET_AUTH_ORIGIN · credentials"]
+    subgraph Browser["🌐 Isolated Browser (Playwright)"]
+        Chrome["Headless Chromium\nfresh context/flow\nno service workers/downloads"]
+    end
 
-    %% User → Dashboard → API
-    User -->|"URL · PRD · scope\ninteraction policy"| UI_Submit
-    UI_Submit -->|"POST /api/runs"| API
-    API --> Admit --> Policy --> Contracts
-    Contracts --> ExploreAgent
+    subgraph Storage["💾 Storage (data/ + store.py)"]
+        DB["SQLite WAL: runs·events·fingerprints\nArtifacts: recon/plan/suite/results/\nheal_log/classifications/report/*.png"]
+    end
 
-    %% Pipeline flow
-    ExploreAgent -->|"recon.json"| PlannerAgent
-    PlannerAgent -->|"plan.initial.json"| CoverageAgent
-    CoverageAgent -->|"plan.json + gaps"| GenAgent
-    GenAgent -->|"suite.json"| ValidateAgent
-    ValidateAgent -->|"validation_report.json"| ExecuteAgent
-    ExecuteAgent -->|"run result"| TriageAgent
-    TriageAgent -->|"repeated selector failure"| HealerAgent
-    HealerAgent -->|"healed result"| ClassifyAgent
-    TriageAgent -->|"passed / escalate"| ClassifyAgent
-    ClassifyAgent -->|"labels + defect records"| Reporter
+    Config["🔑 .env: API key·model\nallowed origins·auth creds"]
+    TargetApp(["🌍 Target Application"])
 
-    %% Re-plan feedback loop
-    CoverageAgent -->|"fixable gaps → 1 re-plan"| LLMAdapter
-    PlannerAgent -->|"llm.plan()"| LLMAdapter
-    HealerAgent -->|"llm.heal() if deterministic fails"| LLMAdapter
-    LLMAdapter -->|"structured Plan / HealProposal"| OpenAI
-    OpenAI -->|"parsed response"| LLMAdapter
+    User --> UI --> API --> Plan
+    Rep --> API --> UI --> User
 
-    %% Browser tools
-    ExploreAgent -->|"crawl()"| Chromium
-    ValidateAgent -->|"execute_flow(validation)"| Chromium
-    ExecuteAgent -->|"execute_flow(run)"| Chromium
-    TriageAgent -->|"execute_flow(retry)"| Chromium
-    HealerAgent -->|"execute_flow(healed)"| Chromium
-    Chromium --> Contexts -->|"HTTP/S"| TargetApp
+    Plan -. "llm.plan call" .-> LLM
+    Heal -. "llm.heal if needed" .-> LLM
+    LLM -. "parsed Plan/Heal" .-> Plan
 
-    %% Storage
-    ExploreAgent & PlannerAgent & CoverageAgent & GenAgent --> Store
-    ValidateAgent & ExecuteAgent & HealerAgent & ClassifyAgent & Reporter --> Store
-    Store --> SQLite & Artifacts
+    Plan -. "crawl/execute" .-> Chrome
+    Gen -. "validate" .-> Chrome
+    Exec -. "execute/retry" .-> Chrome
+    Heal -. "confirm heal" .-> Chrome
+    Chrome --> TargetApp
 
-    %% Config
-    Env -->|"keys · origins · credentials"| LLMAdapter & Runtime & Contexts
-
-    %% Dashboard polling
-    UI_Poll -->|"GET /api/runs/:id"| API
-    API -->|"status · events · results"| UI_Results
-    UI_Results -->|"view / download"| User
+    Plan & Gen & Exec & Heal & Rep --> DB
+    Config -.-> LLM & Chrome
 ```
 
 > **Key design choices:** single Python process · one active `asyncio` task · no LangGraph / Redis / Docker · all stage transitions decided by Python code · OpenAI called ≤ 5×/run (plan + optional re-plan + optional heal) · every locator repair must pass a semantic identity gate and a full-flow confirmation before the suite is updated.
