@@ -14,7 +14,7 @@ def main():
                 response=client.get('/api/readiness')
                 result=response.json()
                 if response.status_code==200 and result.get('ready'):
-                    print(f'Aviar ready: {DEMO_ORIGIN} (browser and data access verified)')
+                    print(f'AIVAR ready: {DEMO_ORIGIN} (browser and data access verified)')
                     return 0
                 if response.status_code==503:
                     for error in result.get('errors',[]):print(f"{error['code']} at {error['stage']}: {error['message']}\n{error['remedy']}",file=sys.stderr)

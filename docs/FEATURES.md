@@ -1,10 +1,11 @@
-# Aviar — implemented features and operating guide
+# AIVAR — implemented features and operating guide
 
+Current enhancement: [Self-healing, persistent suites, PRD uploads and PDF alignment](SELF_HEALING_AND_PDF_ALIGNMENT.md) documents the implemented agent decisions, limits, report fields and verification.
 This is a feature inventory of the working application, not a list of proposed capabilities. Source files are linked so each capability can be reviewed against implementation.
 
 ## 1. What the application does
 
-Aviar accepts a website URL, explores accessible pages, proposes tests, checks the plan for gaps, validates locators in a browser, executes scenarios, investigates failures, and produces reports with browser evidence. A local dashboard shows progress and retains earlier runs.
+AIVAR accepts a website URL, explores accessible pages, proposes tests, checks the plan for gaps, validates locators in a browser, executes scenarios, investigates failures, and produces reports with browser evidence. A local dashboard shows progress and retains earlier runs.
 
 The current deployment is one user, one local server, one active run and headless Chromium. OpenAI is used for planning and a constrained repair fallback. Test execution, stage transitions, metrics and classification rules run in Python.
 
@@ -15,23 +16,23 @@ The current deployment is one user, one local server, one active run and headles
 | URL input | Any HTTP(S) target with `QA_ALLOWED_ORIGINS=*`; exact allowlists remain available | New test run |
 | Planner choice | OpenAI business-flow planning or deterministic observed-content baseline | Planning engine |
 | Natural-language scope | Optional focus instruction included in the planner input | Focus area |
-| Requirements | One requirement per nonempty line, assigned `REQ-1`, `REQ-2`, etc. | Requirements |
-| Exact expectations | Quote expected UI strings; unsupported literal interpretations are marked inferred | Requirements |
+| PRD | Markdown upload up to 64 KiB, prose/list block traceability with `PRD-n` IDs; legacy API requirements remain compatible | PRD upload |
+| Exact expectations | Quote expected UI strings; unsupported literal interpretations are marked inferred | PRD |
 | Page budget | 1–12 pages, default 5 | Page budget |
-| Scenario budget | API supports 1–12 flows; dashboard requests 6 | Request contract |
+| Scenario budget | Dashboard and API support 1–12 flows, default 6; retained suites are never truncated | Request contract |
 | Interaction permission | Fills/clicks and non-read requests enabled explicitly | Interaction checkbox |
 | Resource loading | Compatible mode loads external HTTP(S) assets/read requests; strict mode restricts resource origins | Website resource loading |
 | Canonical redirects | Same-site `www` aliases and HTTP-to-HTTPS redirects on standard ports | Automatic |
-| Additional navigation origins | Explicit extra origins for multi-domain page navigation | Additional navigation origins |
+| Additional navigation origins | Backwards-compatible API field; removed from the form | API only |
 | Authenticated session | Origin-scoped environment login profile or private Playwright storage state | `.env` |
 
-Implementation: [models.py](qa_agent/models.py), [safety.py](qa_agent/safety.py), [browser.py](qa_agent/browser.py).
+Implementation: [models.py](../qa_agent/models.py), [safety.py](../qa_agent/safety.py), [browser.py](../qa_agent/browser.py).
 
 **Compatibility is bounded:** admitting a URL does not prove all of its functionality can be tested. Cross-origin assets are supported, but non-read HTTP methods remain blocked in read-only mode. Applications that use POST for GraphQL queries may need interaction permission on a test environment. Additional navigation origins permit navigation; they do not automatically solve SSO, MFA or configure credentials.
 
 ## 3. Runtime readiness and access-denied handling
 
-At startup, Aviar performs actual checks rather than inferring readiness from installed packages:
+At startup, AIVAR performs actual checks rather than inferring readiness from installed packages:
 
 1. Create a temporary file in the configured data directory, write it and read it back.
 2. Start the Playwright driver.
@@ -49,7 +50,7 @@ For `[WinError 5]`, the code cannot grant OS privileges or override endpoint pro
 
 `QA_BROWSER_CHANNEL` supports bundled `chromium`, installed `chrome` or installed `msedge`. Browser temp files default to `data/runtime/browser-temp`, with `QA_BROWSER_TEMP_DIR` available as an override. Relative `QA_DATA_DIR` values resolve against the project root, regardless of the terminal's current directory.
 
-Implementation: [runtime.py](qa_agent/runtime.py), [server.py](qa_agent/server.py), [run.py](run.py).
+Implementation: [runtime.py](../qa_agent/runtime.py), [server.py](../qa_agent/server.py), [run.py](../run.py).
 
 ## 4. Reconnaissance and page observations
 
@@ -71,7 +72,7 @@ Recon follows links; it does not autonomously interact with every menu, modal or
 
 - Uses the OpenAI Responses API through the Python SDK.
 - Parses strict typed plans with Pydantic.
-- Supplies page observations, requirements, scope, permitted navigation origins and interaction policy.
+- Supplies page observations, extracted PRD requirements, full PRD context, scope, permitted navigation origins and interaction policy.
 - Treats page content as untrusted input rather than tool instructions.
 - Limits each run to five logical OpenAI calls, with one SDK retry per call, a 60-second request timeout and a 6,500-token output cap.
 - Sets `store=False` and records returned token usage.
@@ -83,7 +84,7 @@ Plans contain flow ID/name, risk, category, requirement links, oracle provenance
 
 Requirement linkage is not proof of semantic correctness. Exact quoted text/URL values can remain requirement-backed. Other exact expectations are conservatively marked inferred. Confidence values in later classification are heuristic scores, not calibrated probabilities.
 
-Implementation: [llm.py](qa_agent/llm.py), [planning.py](qa_agent/planning.py), [models.py](qa_agent/models.py).
+Implementation: [llm.py](../qa_agent/llm.py), [planning.py](../qa_agent/planning.py), [models.py](../qa_agent/models.py).
 
 ## 6. Generation, live validation and replay
 
@@ -104,7 +105,7 @@ Live validation replays steps in order, checking each locator in the page state 
 
 The exported suite can be replayed from the project without further OpenAI calls. Its exit code is zero only if all scenarios pass. Authentication and origin configuration still apply.
 
-Implementation: [pipeline.py](qa_agent/pipeline.py), [replay.py](qa_agent/replay.py), [browser.py](qa_agent/browser.py).
+Implementation: [pipeline.py](../qa_agent/pipeline.py), [replay.py](../qa_agent/replay.py), [browser.py](../qa_agent/browser.py).
 
 ## 7. Execution and evidence
 
@@ -118,11 +119,11 @@ HTTP diagnostics are independent of declared UI assertions. For example, SauceDe
 
 ## 8. Bounded repair and failure classification
 
-### Locator regeneration during validation
+### Locator repair using validation evidence
 
-A repeated locator can be scoped using the immediately preceding successfully verified text anchor. The rule chooses the unique matching element inside that anchor's smallest containing ancestor. It does not use the failing assertion's expected value to choose an element. The regenerated flow must pass validation and a fresh execution.
+A repeated locator can be scoped using the immediately preceding successfully verified text anchor. The rule chooses the unique matching element inside that anchor's smallest containing ancestor. It does not use the failing assertion's expected value to choose an element. The validation observation can seed the Healer after two unchanged execution failures. The repaired flow must pass a complete fresh execution.
 
-If no suitable anchor exists, an ambiguous locator can remain `generation_failed`. That is an untested scenario, not a passing test.
+If no safe candidate exists, the failure remains unresolved (`needs_review`). Historical runs can still contain `generation_failed` outcomes.
 
 ### Runtime repair
 
@@ -143,28 +144,31 @@ If no suitable anchor exists, an ambiguous locator can remain `generation_failed
 | `flaky_test` | Unchanged flow failed once and passed on one rerun; root cause unproven |
 | `healed_ok` | Runtime locator repair passed full-flow confirmation |
 | `likely_defect` | The same requirement-backed assertion failed on two isolated attempts |
+| `environment_issue` | Browser or execution issue needing connectivity, timing or availability investigation |
 | `needs_review` | Evidence is insufficient to identify a reliable cause |
 
-Assertions are never weakened during repair. Fingerprints are stored only after successful execution. Verified-repair counts include confirmed regeneration and runtime repair; runtime repairs are also counted separately.
+Assertions are never weakened during repair. Fingerprints are stored only after successful execution. Verified-repair counts include only confirmed locator repairs; all attempts and the original failure are retained.
 
-Implementation: [healing.py](qa_agent/healing.py), [pipeline.py](qa_agent/pipeline.py).
+Implementation: [healing.py](../qa_agent/healing.py), [pipeline.py](../qa_agent/pipeline.py).
 
 ## 9. Dashboard and reports
 
 The responsive dashboard includes:
 
-- Workspace totals, scenario pass rate, verified repairs and attention counts.
+- Run totals, scenario pass rate, verified repairs and attention counts.
 - Searchable recent-run history, target URL, mode, timestamps and status.
 - Live stage indicators and persisted decision logs.
 - Per-scenario results, provenance, classification, diagnostics and screenshots.
-- Expandable test plans with actions and requirement links.
-- Coverage gaps, passing requirement links and repair audits.
+- Expandable Planner output with actions and requirement links.
+- PRD coverage gaps, passing requirement links and repair audits.
+- Defect Classifier details with expected/actual behavior, attempts, evidence and next action.
+- Suite evolution with reused/new scenarios, regressions and bounded UI observations.
 - Configuration, OpenAI-key presence, origin settings and runtime readiness.
 - Cancellation, rerun and evidence export controls.
 
-Exports include Markdown/escaped HTML reports, JUnit XML, JSON contracts and intermediate results, PNG screenshots, the replay suite and decision-log JSON in an evidence ZIP. Pass rate is explicitly distinguished from application coverage. Dollar estimates appear only when input/output token prices are configured; returned usage can exclude calls that timed out but were billed.
+Exports include `START_HERE.md`, Markdown/escaped HTML reports, JUnit XML, JSON contracts and intermediate results, PNG screenshots, the replay suite and decision-log JSON in an evidence ZIP. The start file explains reading order, partial exports and replay prerequisites. Pass rate is explicitly distinguished from application coverage. Dollar estimates appear only when input/output token prices are configured; returned usage can exclude calls that timed out but were billed.
 
-Implementation: [ui/](ui/), [reporting.py](qa_agent/reporting.py), [server.py](qa_agent/server.py).
+Implementation: [ui/](../ui/), [reporting.py](../qa_agent/reporting.py), [server.py](../qa_agent/server.py).
 
 ## 10. Persistence and local operations
 
@@ -195,6 +199,6 @@ Operational checks:
 
 The implemented controls harden local use, but universal website coverage and shared-service production readiness are not established by these features. Websites can require unavailable credentials, MFA, CAPTCHA, explicit test fixtures, cross-frame interaction or unsupported widgets. Report those limitations; do not interpret a completed run as proof of complete testing.
 
-Still required for a shared production service: user identity/RBAC, tenant isolation, hardened worker/network isolation, durable distributed queue/leases, versioned migrations, retention/encryption, load testing, supply-chain checks, incident monitoring and operational restore drills. Automatic mid-flow resume, server-data rollback, cross-browser matrices and semantic PRD-document ingestion are also not implemented.
+Still required for a shared production service: user identity/RBAC, tenant isolation, hardened worker/network isolation, durable distributed queue/leases, versioned migrations, retention/encryption, load testing, supply-chain checks, incident monitoring and operational restore drills. Automatic mid-flow resume, server-data rollback, cross-browser matrices, rich Markdown semantics and document formats beyond bounded Markdown are also not implemented.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the component and deployment diagrams, and the [implementation plan](Autonomous_Test_Orchestration_Agent_Architecture_and_Implementation_Plan.md) for release gates.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the component and deployment diagrams, and the [implementation plan](IMPLEMENTATION_PLAN.md) for release gates.

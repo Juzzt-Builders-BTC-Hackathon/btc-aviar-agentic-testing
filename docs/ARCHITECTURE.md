@@ -1,6 +1,9 @@
-# Aviar — architecture and technology stack
+# AIVAR — architecture and technology stack
 
+Current enhancement: [Self-healing, persistent suites, PRD uploads and PDF alignment](SELF_HEALING_AND_PDF_ALIGNMENT.md) documents the implemented agent decisions, limits, report fields and verification.
 This document describes the code currently implemented in this repository. Mermaid diagrams render in GitHub and Mermaid-capable Markdown previews.
+
+The reasons for choosing this stack and the conditions that would justify LangGraph, PostgreSQL, React or broader browser-agent tooling are documented in [Technology decisions](TECHNOLOGY_DECISIONS.md).
 
 Runtime hardening update: startup now runs filesystem and real browser readiness probes (`runtime.py`); failed readiness blocks job admission. Compatible resource loading permits external assets/read requests, while navigation is constrained to the site, canonical redirects and per-run additional origins. The [feature guide](FEATURES.md) documents these controls and diagnostics in detail.
 
@@ -11,7 +14,7 @@ flowchart TB
     User[QA engineer / developer]
     subgraph Machine[User workstation]
         subgraph Frontend[Dashboard — HTML / CSS / JavaScript]
-            Form[URL, scope, requirements, interaction policy]
+            Form[URL, Markdown PRD, scope, interaction policy]
             History[Run history and metrics]
             Live[Pipeline stages and decision log]
             Evidence[Plans, results, screenshots and exports]
@@ -22,12 +25,12 @@ flowchart TB
             Admission[One active asyncio task / cancellation]
             Policy[URL and action policy — safety.py]
             Contracts[Pydantic contracts — models.py]
-            Pipeline[Deterministic orchestrator — pipeline.py]
+            Pipeline[Meta-orchestrator — pipeline.py / triage.py]
             LLM[OpenAI adapter — llm.py]
             Browser[Browser adapter — browser.py]
             Planner[Coverage and baseline rules — planning.py]
             Healer[Fingerprint and identity rules — healing.py]
-            Reporter[Metrics and reports — reporting.py]
+            Reporter[Test Quality Report and Defect Classifier]
             Persistence[Store — store.py]
         end
         subgraph Execution[Isolated browser execution]
@@ -105,7 +108,7 @@ sequenceDiagram
     participant B as Playwright / Chromium
     participant AI as OpenAI Responses API
     participant DB as SQLite + artifacts
-    QA->>UI: Enter URL, scope and requirements
+    QA->>UI: Enter URL, scope and optional Markdown PRD
     UI->>API: POST /api/runs
     API->>API: Validate session, URL, request and admission limit
     API->>DB: Create queued run
@@ -115,7 +118,9 @@ sequenceDiagram
     O->>B: Crawl observed same-origin links
     B-->>O: Bounded DOM/text/element observations
     O->>DB: recon.json + events
-    alt OpenAI mode
+    O->>DB: Retrieve latest matching completed suite
+    O->>O: Retain existing scenarios and compare observations / PRD
+    alt OpenAI planning or extension needed
         O->>AI: Observations, requirements and policy
         AI-->>O: Structured Plan + usage
     else Deterministic baseline
@@ -128,15 +133,11 @@ sequenceDiagram
     end
     O->>DB: Plan, gaps and executable action suite
     O->>B: Validate each flow in live page state
-    opt Ambiguous locator with verified product anchor
-        O->>O: Scope locator; preserve expectations
-        O->>B: Validate regenerated flow
-    end
     O->>B: Execute flows in fresh contexts
     opt Failed execution
         O->>B: One unchanged rerun
         opt Repeatable selector failure
-            O->>O: Fingerprint matching and ambiguity gate
+            O->>O: Fingerprint matching or validated anchor scoping
             opt Deterministic repair unavailable
                 O->>AI: Request observed candidate selection
                 AI-->>O: Candidate, confidence and rationale
@@ -162,14 +163,12 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     Q[Queued] --> R[Recon]
-    R --> P[Plan]
+    R --> M[Load matching completed suite]
+    M --> P[Retain or extend plan]
     P --> C[Coverage review]
     C -->|One re-plan maximum| P
     C --> G[Generate action suite]
     G --> V[Live validation]
-    V -->|Invalid selector| RG[One regeneration attempt]
-    RG -->|Confirmed| E[Execute]
-    RG -->|Unresolved| GF[Generation failure / coverage gap]
     V --> E
     E -->|Failure| T[Unchanged rerun]
     T --> H[Conditional locator repair]
@@ -177,7 +176,6 @@ flowchart LR
     E --> CL[Classify]
     T --> CL
     CF --> CL
-    GF --> CL
     CL --> RP[Report]
     RP --> CLEAN[Release browser resources]
     CLEAN --> DONE[Completed]
@@ -186,7 +184,7 @@ flowchart LR
     Q -. Process restart .-> I[Interrupted / fresh rerun available]
 ```
 
-Cancellation and fatal errors can occur at any active stage. The diagram shows representative edges for readability. There is a ten-minute run deadline, five logical OpenAI-call maximum, one active run, and configured page/flow limits. Retries are bounded; unresolved scenarios become visible review items.
+Cancellation and fatal errors can occur at any active stage. The diagram shows representative edges for readability. There is a ten-minute run deadline, five logical OpenAI-call maximum, one active run, and configured page/flow limits. The full repair and suite-memory diagram is in [the enhancement guide](SELF_HEALING_AND_PDF_ALIGNMENT.md). Retries are bounded; unresolved scenarios become visible review items.
 
 ## 5. Data and artifact architecture
 
@@ -204,13 +202,17 @@ flowchart TD
     Validation --> Results[run_results.json + screenshots]
     Results --> Heals[heal_log.json]
     Results --> Labels[classifications.json]
+    Results --> Defects[defect_report.json]
+    Plan --> Evolution[suite_evolution.json]
     Req --> Trace[traceability.json]
     Results --> Trace
     Results --> Reports[report.md / report.html / junit.xml]
+    Defects --> Reports
+    Evolution --> Reports
     Heals --> Reports
     Gaps --> Reports
     Trace --> Reports
-    Reports --> Zip[Evidence ZIP with decision_log.json]
+    Reports --> Zip[Evidence ZIP with START_HERE.md and decision_log.json]
 ```
 
 Run artifacts live in `data/<run-id>/`. `data/qa.sqlite3` stores history and indexes. Generated Python is a fixed replay entry point; the model supplies validated JSON actions, not arbitrary Python or shell code. Replay runs the same policy-controlled Playwright executor without calling OpenAI.
@@ -259,4 +261,4 @@ flowchart LR
     Config[.env] --> Server
 ```
 
-This is a local single-user topology. Shared deployment would require authentication/authorization, isolated workers, durable distributed admission, protected artifact storage, retention and operational controls described in the [implementation plan](Autonomous_Test_Orchestration_Agent_Architecture_and_Implementation_Plan.md).
+This is a local single-user topology. Shared deployment would require authentication/authorization, isolated workers, durable distributed admission, protected artifact storage, retention and operational controls described in the [implementation plan](IMPLEMENTATION_PLAN.md).

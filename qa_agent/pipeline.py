@@ -4,13 +4,15 @@ import json
 import time
 from playwright.async_api import async_playwright
 from .browser import auth_state, crawl, execute_flow
-from .healing import deterministic_candidate, semantic_match, classify
+from .healing import deterministic_candidate, semantic_match
 from .llm import LLM
 from .models import RunRequest
-from .planning import baseline_plan, coverage, requirements_list, ground_oracles
+from .planning import baseline_plan, coverage, requirements_list, ground_oracles, prd_requirements
 from .reporting import reports
 from .safety import redact, target_url
 from .runtime import launch_browser, error_details
+from .evolution import previous_suite, page_changes, remap_requirements, merge_plan, outcome_changes, suite_key
+from .triage import triage_flow, defect_report
 
 
 def fingerprint_key(url, flow, index):
@@ -41,16 +43,43 @@ async def run_pipeline(store, rid):
                     if state: event("recon", "Authenticated session established from local configuration.")
                     pages = await crawl(browser, request, state, lambda message: event("recon", message))
                     store.artifact(rid, "recon.json", pages)
-                    requirements = requirements_list(request.requirements)
+                    requirements = requirements_list(request.requirements) + prd_requirements(request.prd_content)
+                    if request.prd_content:
+                        store.artifact(rid, "prd.md", request.prd_content)
+                    previous = previous_suite(store, request)
+                    changes = page_changes(previous["pages"], pages) if previous else []
+                    evolution = {"suite_key": suite_key(request), "previous_run": previous["id"] if previous else None,
+                                 "ui_changes": changes, "reused": [], "added": [], "deferred": [], "outcomes": []}
+                    retained = remap_requirements(previous["plan"].model_copy(deep=True), previous["requirements"], requirements) if previous else None
+                    if retained:
+                        evolution["reused"] = [f.id for f in retained.flows]
+                        event("plan", f"Reusing {len(retained.flows)} existing scenarios from {previous['id'][:8]}; original assertions retained.")
                     store.artifact(rid, "requirements.json", requirements)
                     event("plan", "Generating evidence-grounded scenarios with OpenAI." if request.mode == "openai" else "Generating a deterministic baseline; no AI calls are made.")
-                    plan = await llm.plan(pages, request, requirements) if request.mode == "openai" else baseline_plan(pages, request.max_flows)
-                    plan.flows = plan.flows[:request.max_flows]
+                    limit = max(request.max_flows, len(retained.flows) if retained else 0)
+                    prd_changed = previous and previous["requirements"] != requirements
+                    pending = coverage(retained, pages, requirements) if retained else []
+                    should_extend = not retained or bool(changes) or prd_changed or any("no planned test" in g for g in pending)
+                    if retained and (not should_extend or len(retained.flows) >= limit):
+                        plan = retained
+                        if should_extend:
+                            plan.gaps.append("Scenario budget reached; existing scenarios retained. Increase the scenario budget to explore additions.")
+                        event("plan", "Existing suite retained without another planning call.")
+                    else:
+                        try:
+                            proposed = await llm.plan(pages, request, requirements, existing=retained) if request.mode == "openai" else baseline_plan(pages, request.max_flows)
+                            plan, evolution["added"], evolution["deferred"] = merge_plan(retained, proposed, limit)
+                        except Exception as exc:
+                            if retained is None: raise
+                            plan = retained
+                            plan.gaps.append(f"Suite enhancement unavailable ({type(exc).__name__}); existing suite will still execute.")
+                    plan.gaps = list(dict.fromkeys(plan.gaps))[-30:]
+                    store.artifact(rid, "suite_evolution.json", evolution)
                     store.artifact(rid, "plan.initial.json", plan.model_dump())
                     event("coverage", "Checking requirement links, assertions and missing negative paths before generation.")
                     gaps = coverage(plan, pages, requirements)
                     fixable = [g for g in gaps if "no planned test" in g or "no negative" in g or "Business journeys" in g]
-                    if fixable and request.mode == "openai":
+                    if fixable and request.mode == "openai" and retained is None:
                         event("plan", "Coverage gaps triggered one bounded re-plan.")
                         plan = await llm.plan(pages, request, requirements, fixable)
                         plan.flows = plan.flows[:request.max_flows]
@@ -76,41 +105,12 @@ async def run_pipeline(store, rid):
                     results, heals = [], []
                     event("execute", "Executing validated flows in fresh browser contexts.")
                     for flow, validated in zip(plan.flows, validation):
-                        if validated["status"] == "blocked":
-                            result = validated
-                        elif validated.get("failure_kind") == "selector":
-                            # Bounded regeneration uses observed semantic fingerprints only.
-                            event("heal", f"Checking a single locator repair for {flow.name}.")
-                            repaired, audit = await repair(store, request, flow, validated, pages, llm)
-                            heals.append(audit)
-                            if repaired:
-                                validated = await execute_flow(browser, request, repaired, state, store.root / rid, "regenerated")
-                                if validated["status"] == "passed":
-                                    flow.steps = repaired.steps
-                                    result = await execute_flow(browser, request, flow, state, store.root / rid, "run")
-                                    audit["verified"] = result["status"] == "passed"
-                                else: result = {**validated, "status": "generation_failed"}
-                            else: result = {**validated, "status": "generation_failed"}
-                        else:
-                            result = await execute_flow(browser, request, flow, state, store.root / rid, "run")
-                        retry, healed = None, False
-                        if result["status"] == "failed":
-                            event("triage", f"Re-running {flow.name} once without changes to check repeatability.")
-                            retry = await execute_flow(browser, request, flow, state, store.root / rid, "retry")
-                            if retry["status"] == "failed" and result.get("failure_kind") == "selector":
-                                event("heal", "Trying deterministic fingerprint matching, then a gated semantic fallback.")
-                                repaired, audit = await repair(store, request, flow, result, pages, llm)
-                                heals.append(audit)
-                                if repaired:
-                                    confirmation = await execute_flow(browser, request, repaired, state, store.root / rid, "healed")
-                                    audit["verified"] = confirmation["status"] == "passed"
-                                    if audit["verified"]:
-                                        result["original_failure"] = {k: v for k, v in result.items() if k != "original_failure"}
-                                        result.update(status="passed", healed_attempt=confirmation)
-                                        flow.steps = repaired.steps
-                                        healed = True
-                        result["classification"] = classify(result.get("original_failure", result), retry, healed)
-                        if retry: result["retry"] = retry
+                        async def execute(candidate, attempt):
+                            return await execute_flow(browser, request, candidate, state, store.root / rid, attempt)
+                        async def propose(candidate, failure):
+                            return await repair(store, request, candidate, failure, pages, llm)
+                        result, audits = await triage_flow(flow, validated, execute, propose, event)
+                        heals.extend(audits)
                         if result.get("diagnostics"):
                             gaps.append(f"{flow.name}: {len(result['diagnostics'])} browser/HTTP warning(s) observed; inspect diagnostics even if UI assertions passed.")
                         if result["status"] == "passed":
@@ -122,12 +122,19 @@ async def run_pipeline(store, rid):
                         store.artifact(rid, "run_results.json", results)
                         store.artifact(rid, "heal_log.json", heals)
                         event("execute", f"{flow.name}: {result['status']} ({result['classification']['label']})")
-                    event("report", "Aggregating deterministic results, requirements traceability and uncovered risks.")
+                    event("report", "Synthesizing the Test Quality Report, Defect Classifier and suite evolution.")
+                    evolution["outcomes"] = outcome_changes(previous["results"] if previous else [], results)
+                    evolution["added"] = [f.id for f in plan.flows if f.id not in evolution["reused"]]
+                    store.artifact(rid, "suite_evolution.json", evolution)
+                    store.artifact(rid, "defect_report.json", defect_report(plan, results, heals))
                     export_suite(store, rid, request, plan)
                     store.artifact(rid, "plan.json", plan.model_dump())
                     store.artifact(rid, "coverage_gaps.json", gaps)
                     store.artifact(rid, "classifications.json", [{"flow_id": r["flow_id"], **r["classification"]} for r in results])
                     summary = reports(store, rid, request, plan, results, gaps, heals, requirements, llm.usage())
+                    summary.update(reused=len(evolution["reused"]), added=len(evolution["added"]),
+                                   regressions=sum(c["change"] == "regression" for c in evolution["outcomes"]),
+                                   ui_changes=len(changes), previous_run=evolution["previous_run"])
                 finally: await browser.close()
         summary["duration_seconds"] = round(time.monotonic() - started, 1)
         store.update(rid, status="completed", stage="done", summary=summary)

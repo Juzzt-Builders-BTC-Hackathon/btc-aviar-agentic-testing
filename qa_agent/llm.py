@@ -52,8 +52,10 @@ class LLM:
             raise ValueError("OpenAI returned an incomplete response or refusal; no tests were executed")
         return response.output_parsed
 
-    async def plan(self, recon, request, requirements, feedback=None):
-        return await self.ask(Plan, SYSTEM, {"pages": recon, "scope": request.scope, "requirements": requirements,
+    async def plan(self, recon, request, requirements, feedback=None, existing=None):
+        instruction = SYSTEM + "\nWhen existing_scenarios are supplied, propose only additional meaningful scenarios. Never rewrite their assertions or rename an existing scenario to bypass deduplication. Report unsupported or changed requirements as gaps."
+        return await self.ask(Plan, instruction, {"pages": recon, "scope": request.scope, "requirements": requirements,
+            "prd_markdown": request.prd_content, "existing_scenarios": existing.model_dump() if existing else None,
             "allow_interactions": request.allow_interactions, "navigation_origins": request.navigation_origins,
             "max_flows": request.max_flows, "coverage_feedback": feedback or []})
 

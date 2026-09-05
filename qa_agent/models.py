@@ -10,6 +10,8 @@ class RunRequest(StrictModel):
     url: str = Field(min_length=8, max_length=2000)
     scope: str = Field(default="", max_length=2000)
     requirements: str = Field(default="", max_length=12000)
+    prd_name: str = Field(default="", max_length=200)
+    prd_content: str = Field(default="", max_length=65536)
     mode: Literal["openai", "baseline"] = "openai"
     allow_interactions: bool = False
     max_pages: int = Field(default=5, ge=1, le=12)
@@ -20,6 +22,16 @@ class RunRequest(StrictModel):
     @model_validator(mode="after")
     def validate_navigation_origins(self):
         from .safety import origin
+        if self.prd_content:
+            if not self.prd_name.lower().endswith((".md", ".markdown")):
+                raise ValueError("PRD must be a Markdown (.md or .markdown) document")
+            if len(self.prd_content.encode("utf-8")) > 65536 or "\x00" in self.prd_content:
+                raise ValueError("PRD must be UTF-8 text, at most 64 KiB, without NUL bytes")
+            if not self.prd_content.strip():
+                raise ValueError("PRD is empty")
+        if self.prd_name and not self.prd_content:
+            raise ValueError("PRD content is required when a filename is supplied")
+        self.prd_name = self.prd_name.replace("\\", "/").rsplit("/", 1)[-1]
         self.navigation_origins = list(dict.fromkeys(origin(value) for value in self.navigation_origins))
         return self
 

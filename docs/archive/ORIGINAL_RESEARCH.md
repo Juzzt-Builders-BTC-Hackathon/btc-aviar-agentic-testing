@@ -1,3 +1,5 @@
+> Archived source research. Proposed stacks, vendor comparisons, statistics and embedded recommendations below are historical context, not implemented product claims. Start with the [current README](../../README.md) and [technology decisions](../TECHNOLOGY_DECISIONS.md).
+
 # Autonomous Test Orchestration Agent — Deep Research & Strategy Report
 **Bessemer Tech Catalyst · AI/ML Track · Prepared for hackathon team**
 

@@ -22,6 +22,29 @@ def requirements_list(text):
     return [{"id": f"REQ-{i+1}", "text": line.strip()} for i, line in enumerate(x for x in text.splitlines() if x.strip())]
 
 
+def prd_requirements(text):
+    """Extract traceable Markdown prose blocks; headings remain context, not tests."""
+    blocks, paragraph = [], []
+    fenced = False
+    def flush():
+        if paragraph:
+            blocks.append(" ".join(paragraph))
+            paragraph.clear()
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(("```", "~~~")):
+            flush(); fenced = not fenced; continue
+        if fenced: continue
+        if not line or line.startswith("#") or re.fullmatch(r"[-*_]{3,}", line):
+            flush(); continue
+        if re.match(r"^(?:[-*+] |\d+[.)] )", line):
+            flush()
+            line = re.sub(r"^(?:[-*+] |\d+[.)] )(?:\[[ xX]\] )?", "", line)
+        paragraph.append(line)
+    flush()
+    return [{"id": f"PRD-{i+1}", "text": block} for i, block in enumerate(dict.fromkeys(blocks))]
+
+
 def baseline_plan(pages, limit):
     flows = []
     for page in pages:

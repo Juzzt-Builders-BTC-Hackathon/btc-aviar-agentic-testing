@@ -1,0 +1,94 @@
+{
+  "first": {
+    "id": "b17a44bf5d164fef8f74098eded1e9a9",
+    "summary": {
+      "total": 2,
+      "passed": 1,
+      "failed": 1,
+      "blocked": 0,
+      "healed": 0,
+      "runtime_healed": 0,
+      "pass_rate": 50,
+      "gap_count": 5,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 4079,
+        "output_tokens": 727,
+        "estimated_cost_usd": null
+      },
+      "reused": 0,
+      "added": 2,
+      "regressions": 0,
+      "ui_changes": 0,
+      "previous_run": null,
+      "duration_seconds": 52.5
+    }
+  },
+  "second": {
+    "id": "f044b0b0d74341849fe5d304817442e8",
+    "summary": {
+      "total": 3,
+      "passed": 2,
+      "failed": 1,
+      "blocked": 0,
+      "healed": 0,
+      "runtime_healed": 0,
+      "pass_rate": 67,
+      "gap_count": 6,
+      "usage": {
+        "calls": 1,
+        "input_tokens": 2551,
+        "output_tokens": 252,
+        "estimated_cost_usd": null
+      },
+      "reused": 2,
+      "added": 1,
+      "regressions": 0,
+      "ui_changes": 0,
+      "previous_run": "b17a44bf5d164fef8f74098eded1e9a9",
+      "duration_seconds": 38.0
+    },
+    "evolution": {
+      "suite_key": "b44ded07c72a18dfb5a1a249890ec145499e32bcd39b39b470fb47f585a8eee2",
+      "previous_run": "b17a44bf5d164fef8f74098eded1e9a9",
+      "ui_changes": [],
+      "reused": [
+        "F1",
+        "F2"
+      ],
+      "added": [
+        "F3"
+      ],
+      "deferred": [],
+      "outcomes": [
+        {
+          "flow_id": "F1",
+          "name": "Homepage heading and notebook visibility",
+          "change": "unchanged",
+          "previous": "passed",
+          "current": "passed"
+        },
+        {
+          "flow_id": "F2",
+          "name": "Search input boundary visibility",
+          "change": "unchanged",
+          "previous": "failed",
+          "current": "failed"
+        },
+        {
+          "flow_id": "F3",
+          "name": "Homepage pencil visibility",
+          "change": "new_scenario",
+          "previous": null,
+          "current": "passed"
+        }
+      ]
+    }
+  },
+  "checks": [
+    "live PRD planning",
+    "PRD traceability",
+    "existing assertions retained",
+    "live incremental planning"
+  ]
+}

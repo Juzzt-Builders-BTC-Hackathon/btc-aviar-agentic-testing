@@ -36,7 +36,7 @@ async def main():
                 errors=[]
                 page.on('pageerror',lambda err:errors.append(str(err)))
                 await page.goto(config.DEMO_ORIGIN)
-                await page.get_by_role('button',name='Explore local demo').click()
+                await page.get_by_role('button',name='Try a demo').click()
                 await expect(page.locator('#run-mode')).to_have_value('baseline')
                 async with page.expect_response(lambda response: response.url.endswith('/api/runs') and response.request.method=='POST') as created:
                     await page.get_by_role('button',name='Start test run').click()
@@ -57,8 +57,9 @@ async def main():
                 assert all(r['status']=='passed' for r in replay_results)
                 checks.append({'check':'generated Python suite replay without OpenAI','passed':True})
                 await page.reload();await page.wait_for_timeout(1000)
+                await page.locator('[data-run=\"'+run['id']+'\"]').first.click()
                 await page.screenshot(path=str(root/'dashboard-desktop.png'),full_page=True)
-                await page.get_by_role('tab',name='Coverage & risks').click()
+                await page.get_by_role('tab',name='PRD coverage & risks').click()
                 assert await page.get_by_text('Passing tests do not prove full coverage.',exact=False).count()==1
                 await page.get_by_role('button',name='Configuration',exact=False).click()
                 assert await page.get_by_text('OpenAI Responses API',exact=False).count()==1

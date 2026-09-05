@@ -1,109 +1,139 @@
-# Aviar — local autonomous QA
+# AIVAR — Autonomous Test Orchestration Agent
 
-A locally running dashboard that explores a web application, creates a test plan with OpenAI, reviews coverage, validates and executes Playwright scenarios, attempts bounded locator repairs, and exports evidence.
+**Give AIVAR a website URL. Get a reusable test suite, verified locator repairs, and a Test Quality Report with browser evidence.**
 
-## Start on Windows
+Built for the Bessemer Tech Catalyst AI/ML problem statement. AIVAR coordinates **Planner → Generator → Executor → Healer → Defect Classifier**, evaluates coverage between stages, and records why it reused, extended, retried, repaired or escalated a test.
 
-Python 3.12 is required. From this directory:
+The focus is maintaining useful tests as a website changes. Repeat runs retain scenario IDs and expected results. Locator drift can be repaired after verification; changed expected behavior remains visible as a failure requiring investigation.
+
+## For the jury: start here
+
+| Read | What it answers |
+|---|---|
+| [Jury and demo guide](docs/JURY_GUIDE.md) | What to demonstrate in five minutes and how to interpret the results |
+| [Architecture](docs/ARCHITECTURE.md) | Components, orchestration, browser isolation and data flow |
+| [Technology decisions](docs/TECHNOLOGY_DECISIONS.md) | Why this stack, why no LangGraph, examples and trade-offs |
+| [Implemented features](docs/FEATURES.md) | What each feature actually does |
+| [PDF alignment and self-healing](docs/SELF_HEALING_AND_PDF_ALIGNMENT.md) | Requirement mapping, reuse rules, repair gates and limitations |
+| [Verification](docs/VERIFICATION.md) | Measured results, reproducible checks and unresolved observations |
+| [Report guide](docs/REPORT_GUIDE.md) | How to read the ZIP, classifications and repair evidence |
+| [Implementation roadmap](docs/IMPLEMENTATION_PLAN.md) | Delivered milestones and future engineering work |
+
+## Run locally
+
+Prerequisites: **Python 3.12** and Chromium installed through Playwright. OpenAI mode needs your own API key and network access. Baseline needs no model key. Windows is the verified environment; Linux/macOS instructions are supplied but were not acceptance-tested here.
+
+From the repository root in PowerShell:
 
 ```powershell
 python -m venv .venv
 ./.venv/Scripts/python.exe -m pip install -r requirements.txt
 ./.venv/Scripts/python.exe -m playwright install chromium
-Copy-Item .env.example .env  # first setup only; do not overwrite an existing .env
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Set `OPENAI_API_KEY` in `.env`, then:
+Set `OPENAI_API_KEY` privately in `.env`. `OPENAI_MODEL` is configurable; the example uses `gpt-5.4-mini`. Model access depends on your account. Keep `.env` private.
 
 ```powershell
 ./.venv/Scripts/python.exe run.py
 ```
 
-Open **http://127.0.0.1:8765**. On subsequent starts, `./start.ps1` also works. The server intentionally uses one worker and binds only to loopback. Do not use Uvicorn `--reload` on Windows: the browser worker needs an event loop supporting subprocesses.
+Open **[http://127.0.0.1:8765](http://127.0.0.1:8765)** and check runtime readiness under **Configuration**. On subsequent launches, `./start.ps1` starts the application. Stop with **Ctrl+C** before starting another instance. Do not use multiple workers or Uvicorn `--reload` with this Windows browser process.
 
-For macOS/Linux use `.venv/bin/python` in the equivalent commands. Chromium may also require `python -m playwright install --with-deps chromium`.
+On Linux/macOS, create the environment with `python3 -m venv .venv` and use `.venv/bin/python` instead. Linux may require `.venv/bin/python -m playwright install --with-deps chromium`.
 
 ## First run
 
-1. Choose **Explore local demo** for a deterministic baseline without API calls, or **New test run → OpenAI** for AI-generated scenarios.
-2. Use `http://127.0.0.1:8765/demo/` to test the included store. For an interactive AI run, enable form interactions and supply requirements such as:
-   ```text
-   Adding a notebook increases the cart count to "1 items".
-   Adding one notebook updates the total to "$18.00".
-   Invalid discount codes show "Invalid discount code".
-   Searching for zzzunknown shows "No products found".
-   ```
-3. Watch the pipeline, then inspect **Results**, **Test plan**, **Decision log**, **Coverage & risks**, and **Artifacts**.
-4. Export the ZIP for JSON artifacts, screenshots, Markdown/HTML reports, JUnit XML and a replayable suite.
+1. Click **Try a demo**, then start the baseline. It executes real Chromium checks against the included Fieldnotes shop without AI calls.
+2. For business-flow planning, choose **New test run → OpenAI · Business-flow planning** and enter a test URL.
+3. Optionally upload [the example Markdown PRD](examples/fieldnotes-prd.md) and enter a focus area. Enable **Allow clicks and form input** for the example cart, search and coupon scenarios.
+4. Under **Execution options**, select the **Page budget** (pages explored) and **Scenario budget** (cases planned). Both support 1–12; defaults are five pages and six cases.
+5. Inspect **Results**, **Planner**, **Decision log**, **PRD coverage & risks**, **Defect Classifier**, and **Changes & repairs**.
+6. Choose **Export evidence**, unzip it, read **START_HERE.md**, and open **report.html**. The [report guide](docs/REPORT_GUIDE.md) explains the artifacts.
+7. **Run again** preserves the URL, policy, focus and PRD. Matching scenarios are reused; new evidence or PRD gaps can trigger additions within the budget.
 
-Baseline mode runs real browsers but only tests observed page content. It is not AI planning or business coverage. AI failures do not silently fall back to baseline. Quote exact expected UI strings in requirements; assertions without exact quoted grounding are marked inferred. HTTP/browser warnings remain visible even if UI assertions pass.
+**Baseline checks observed content. OpenAI plans business flows.** A completed run means orchestration finished, not that every test passed. A 100% scenario pass rate does not mean full application coverage.
 
-## SauceDemo
+## What makes it agentic?
 
-The local `.env` in this workspace is configured with the supplied demo login. Credentials are not committed. On a fresh installation, fill `TARGET_USERNAME` and `TARGET_PASSWORD` yourself using the public test credentials. The selector defaults in `.env.example` match SauceDemo.
+```mermaid
+flowchart LR
+    URL[URL + optional PRD] --> P[Planner and suite memory]
+    P --> C[Coverage review]
+    C --> G[Generator and live validation]
+    G --> E[Executor]
+    E -->|Failure| R[Unchanged retry]
+    R -->|Repeated locator failure| H[Healer]
+    H --> V[Verify original assertions]
+    E --> D[Defect Classifier]
+    R --> D
+    V --> D
+    D --> Q[Test Quality Report]
+    Q --> M[(Reusable suite and evidence)]
+    M --> P
+```
 
-Use **https://www.saucedemo.com/inventory.html** as the run URL. Aviar logs in before recon and reuses the authenticated storage state in isolated contexts. The target origin must match `TARGET_AUTH_ORIGIN`. This configuration tests authenticated product flows; it does not claim coverage of all supplied user personas or login failures. To use another persona, change the local username and restart.
+The Python meta-orchestrator chooses transitions from browser evidence and coverage gaps. A repair changes only a uniquely identified failed locator, then replays the complete flow. Ambiguous repairs and changed business expectations are escalated. **LangGraph is not installed**; [Technology decisions](docs/TECHNOLOGY_DECISIONS.md) explains why and when it would become useful.
 
-All HTTP(S) target origins are enabled with `QA_ALLOWED_ORIGINS=*`. To restrict targets again, replace `*` with comma-separated exact origins. Compatible resource loading permits external assets and read requests; strict mode is available per run. Navigation permits the selected site, common www/HTTP-to-HTTPS redirects, and any explicitly added navigation origins. Dashboard CORS remains restricted. For authenticated sites, configure login selectors or `QA_STORAGE_STATE` and `TARGET_AUTH_ORIGIN`. Storage state is an absolute path to a private Playwright JSON session file. State and credentials never enter model prompts or exported suites.
+## Verified behavior
 
-## Behavior and boundaries
+- **36 unit/API/lifecycle tests passed** on Windows.
+- A controlled browser sequence verified locator repair, reuse of that repair, preservation of a content regression, and a new scenario for a newly discovered page.
+- PRD upload, classifier/change tabs, mobile width and JavaScript-error checks passed.
+- The final end-to-end run passed the dashboard-created baseline (2/2), generated-suite replay, local interactions, repair/classifier fixtures, authenticated SauceDemo baseline (1/1), and cancellation.
+- Two live OpenAI PRD runs demonstrated **two scenarios retained and one added**. The first passed **1/2** cases; the second passed **2/3**. An unsupported placeholder-text assertion remained unresolved in both. This is a documented limitation, not an application defect claim.
 
-- OpenAI Responses API with strict Pydantic output validation, `store=False`, configurable model, request timeout, retry limits and reported token usage.
-- Deterministic orchestration: one coverage re-plan, one locator-regeneration attempt, one unchanged failure rerun, and one verified runtime repair. No arbitrary model-authored Python or shell execution.
-- Compatible or strict resource policy; wildcard or explicit target admission; scoped navigation; blocked downloads and service workers; isolated contexts; transactions/destructive click intents blocked.
-- Read-only mode blocks clicks, fills and non-read HTTP methods after explicit authentication. It cannot guarantee that an application’s GET endpoints have no side effects. Use test environments.
-- Interactions are opt-in and may execute during validation, execution and retries. Use resettable test data. Payments, deletion and order completion remain blocked in this version.
-- Assertions remain unchanged during healing. Repeated product locators can be scoped to the smallest container of the immediately preceding verified text anchor; the expected price is never used to choose the product. Classification is evidence-based and heuristic: `likely_defect` requires a repeated requirement-backed failure. Inferred expectations remain `needs_review`.
-- SQLite WAL stores history and append-only application events. Interrupted runs retain evidence and can be rerun; automatic mid-flow resume is intentionally disabled because interactions may not be idempotent.
-- All app assets are local; no Node build, CDN, Docker or cloud service is required except OpenAI for AI planning and the target website itself.
+See [Verification](docs/VERIFICATION.md) for exact scope and records. Generated plans can vary across runs and model versions.
 
-This is a working single-user local implementation with hardening controls, **not a certified multi-user production service**. The [implementation plan](Autonomous_Test_Orchestration_Agent_Architecture_and_Implementation_Plan.md) documents supported behavior, deviations from the source proposal, release gates and remaining deployment work.
-
-## Tests
+## Test and replay
 
 ```powershell
 ./.venv/Scripts/python.exe -m pytest -q
-# With run.py already running:
-./.venv/Scripts/python.exe -m scripts.verify_local --sauce
-# Optional live, billable OpenAI acceptance runs:
-./.venv/Scripts/python.exe -m scripts.verify_ai
-./.venv/Scripts/python.exe -m scripts.verify_ai --sauce
+# Start run.py before browser acceptance checks:
+./.venv/Scripts/python.exe -m scripts.verify_evolution
+# Optional live OpenAI check; incurs API usage:
+./.venv/Scripts/python.exe -m scripts.verify_prd_ai
+# Replay an exported suite from this repository without planning calls:
+./.venv/Scripts/python.exe -m qa_agent.replay "path/to/extracted/suite.json"
 ```
 
-The integration script launches headless Chromium, creates a run through the actual UI, checks reports and responsive layouts, executes cart/negative scenarios, and verifies failure classification and selector repair. `--sauce` additionally runs a real authenticated baseline against SauceDemo. The integration tests' deliberately wrong expected price tests classifier behavior; it is not presented as a real demo-store defect.
+Other targeted checks cover local interactions, network compatibility and authenticated SauceDemo; see [Verification](docs/VERIFICATION.md). Replay needs this project's interpreter, dependencies, browser and local authentication. The ZIP is not a standalone browser installer.
 
-Screenshots and a machine-readable verification record are written to `data/verification/`. These are local artifacts, not committed fixtures.
+## Target access and operating limits
 
-Replay a generated suite without AI calls:
+`QA_ALLOWED_ORIGINS=*` admits HTTP(S) targets. Authentication, CAPTCHA/MFA, cross-domain journeys, dynamic state, canvas and inaccessible content can still limit testing. Compatible loading supports external read resources; navigation remains constrained. Additional navigation origins remain an API compatibility option, not a dashboard field.
 
-```powershell
-./.venv/Scripts/python.exe -m qa_agent.replay data/<run-id>/suite.json
+For SauceDemo, use `https://www.saucedemo.com/inventory.html`, set credentials privately in `.env`, and retain `TARGET_AUTH_ORIGIN=https://www.saucedemo.com`. The example selectors match that login. Other sites need their own login selectors or `QA_STORAGE_STATE`. No credentials are committed.
+
+Limits: **one local user, one active run, Chromium, ten minutes, five logical model calls**. Each SDK call can retry once. A failed scenario gets one unchanged execution retry and at most one locator repair with confirmation. Interactions can repeat during validation and retry; use resettable test data. Payments, destructive actions and order completion are blocked by the current policy.
+
+This is a working local hackathon implementation. Multi-user hosting, distributed execution, CI/CD integration, arbitrary flow repair and complete production coverage are not delivered features.
+
+## Troubleshooting and data
+
+| Symptom | Action |
+|---|---|
+| Browser missing | Run the Playwright Chromium installation command. |
+| `[WinError 5] Access is denied` | Start in a normal local PowerShell terminal; check folder/browser permissions. Inspect Configuration and `runtime_error.json`. The application cannot bypass OS policy. |
+| Port already in use | Stop the existing server. `scripts/restart_local.ps1` is a helper for an idle local server. |
+| OpenAI key/model error | Check private `.env`, account access and connectivity, then restart. Baseline needs no key. |
+| Protected page unavailable | Configure target-specific authentication; review crawl gaps. |
+| Settings not reflected | Restart and refresh the dashboard. |
+
+`data/` stores SQLite history, PRDs, screenshots and reports. It is gitignored, not encrypted. Stop the server before backing up the entire directory. Retention is manual. Optional token prices in `.env` enable estimates; unset prices remain unavailable. Timed-out calls can still incur provider charges.
+
+## Repository map
+
+```text
+qa_agent/      API, planner, browser, Healer, persistence and reports
+ui/            Dashboard HTML/CSS/JavaScript; no frontend build step
+demo/          Fieldnotes test application
+scripts/       Startup, readiness and acceptance checks
+tests/         Unit, API, lifecycle and repair-invariant tests
+examples/      Optional Markdown PRD
+docs/          Jury guide, architecture, decisions, evidence and roadmap
+docs/archive/  Original research, separated from implementation claims
+data/          Local generated evidence and state; ignored by Git
 ```
 
-The replay command returns zero only when all scenarios pass. Run it from this project with the same environment configuration and allowed target origins.
-
-## Operations
-
-The **Configuration** screen shows real startup readiness: writable data storage and a successful browser launch/DOM check. `/api/health` is liveness; `/api/readiness` returns 200 only when those checks pass. Jobs are rejected with recovery guidance when readiness fails.
-
-If you see **`[WinError 5] Access is denied`**, check the run timestamp. The original restricted-sandbox failure remains in history; the current server may already be healthy. Use **Run again** after checking readiness. For a new failure, launch `./start.ps1` from a normal local PowerShell terminal, check directory permissions, and have IT approve blocked browser/driver executables when required. The app cannot override Windows permissions. `runtime_error.json` records the failing stage and guidance.
-
-Browser temporary files default to `data/runtime/browser-temp`. Override `QA_BROWSER_TEMP_DIR` with a writable location if needed. Set `QA_BROWSER_CHANNEL=chrome` or `msedge` to use an installed browser; the default remains bundled `chromium`.
-
-- **Stop:** Ctrl+C in the server terminal. A background instance started during setup records its launcher PID in `data/server.pid`; verify that process and its `run.py` child before stopping it.
-- **Restart:** run `start.ps1`. Configuration changes require restart. A new local session cookie is issued when you reload the dashboard.
-- **Backup:** stop the server and copy the entire `data/` directory to an access-controlled location. It contains database, screenshots, DOM observations, requirements and reports. Protect it as application data; `.gitignore` is not encryption.
-- **Retention:** no automatic deletion. Archive or remove old run directories and matching database entries only after backup. Disk usage depends on screenshots and run count.
-- **Costs:** provide `OPENAI_INPUT_PRICE` and `OPENAI_OUTPUT_PRICE` as USD per million tokens if you want estimates. No unverified pricing is hardcoded. Timeouts may be billed without usage being returned.
-- **Corporate proxies:** retain normal TLS verification. Configure approved proxy/certificate settings in your environment if network access is blocked.
-- **Browser missing:** run the Chromium installation command above. An executable installed by a different Playwright version may not match the pinned browser revision.
-
-## Source documents and API references
-
-See [Architecture and technology stack](ARCHITECTURE.md) for detailed component, execution-sequence, deployment and data-flow diagrams, plus the technologies actually used by this implementation.
-
-See [Implemented features and operating guide](FEATURES.md) for the detailed feature inventory, configuration behavior, evidence formats and supported website boundaries.
-
-The original [research document](Autonomous_Test_Orchestration_Agent_Deep_Research.md) is preserved. Its vendor comparisons and numerical claims were treated as proposal context, not independently established facts or instructions.
-
-The OpenAI integration follows the official [Structured Outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs). Browser session isolation follows [Playwright BrowserContext](https://playwright.dev/python/docs/api/class-browsercontext).
+The [original research](docs/archive/ORIGINAL_RESEARCH.md) is retained as provenance. Its proposed stack and numerical claims are not the specification of the running implementation.

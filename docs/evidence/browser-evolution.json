@@ -1,0 +1,20 @@
+{
+  "fixture_runs": [
+    "20ce41e523e4400f8e157dc1ecc5f6f5",
+    "98d0c6e09a1b494da25dd812b4620e98",
+    "756e78ec394942bda1d01d52ebf2b11b",
+    "3b5d762f319b4cc2ad39246d75c16cfb"
+  ],
+  "ui_run": "9990e4fa0e4848f8a4b33eeadb52fb83",
+  "checks": [
+    "locator drift repaired",
+    "original assertions preserved",
+    "verified repair reused",
+    "content regression retained",
+    "new page scenario appended",
+    "PRD upload and traceability",
+    "classifier and change tabs",
+    "mobile layout",
+    "no JS errors"
+  ]
+}

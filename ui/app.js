@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state = {config:null,runs:[],selected:null,detail:null,tab:'results',nav:'overview',busy:false,open:new Set()};
+const state = {config:null,runs:[],selected:null,detail:null,tab:'results',nav:'overview',busy:false,prd:null,legacyRequirements:'',navigationOrigins:[],open:new Set()};
 const terminal = status => !['queued','running'].includes(status);
 const pill = status => `<span class="pill ${esc(status)}">${esc(status.replaceAll('_',' '))}</span>`;
 const time = value => new Date(value).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -16,11 +16,12 @@ function openRun(demo=false, request=null) {
   if(!state.config) return toast('Waiting for local configuration.');
   $('target-url').value=request?.url || (demo?state.config.demo_url:'https://www.saucedemo.com/inventory.html');
   $('run-mode').value=request?.mode || (demo || !state.config.openai_configured?'baseline':'openai');
-  $('run-scope').value=request?.scope || '';$('run-requirements').value=request?.requirements || '';
+  $('run-scope').value=request?.scope || '';state.legacyRequirements='';
+  state.prd=request?.prd_content?{name:request.prd_name,content:request.prd_content}:request?.requirements?{name:'previous-requirements.md',content:request.requirements}:null;$('prd-file').value='';renderPrd();
   $('max-pages').value=request?.max_pages || 5;$('allow-interactions').checked=request?.allow_interactions || false;
   $('resource-policy').value=request?.resource_policy || 'compatible';
-  $('navigation-origins').value=(request?.navigation_origins || []).join(', ');
-  $('advanced-options').open=Boolean(request?.requirements || request?.navigation_origins?.length);
+  state.navigationOrigins=request?.navigation_origins||[];$('max-flows').value=request?.max_flows||6;
+  $('advanced-options').open=false;
   showError('form-error','');$('run-dialog').showModal();
 }
 function renderRuns() {
@@ -54,7 +55,7 @@ function renderDetail() {
   $('detail-title').textContent=new URL(r.request.url).host;
   $('detail-subtitle').textContent=`${r.request.url} · ${r.request.mode==='openai'?'OpenAI planning':'Deterministic baseline'} · ${time(r.created)}`;
   $('download-run').href=`/api/runs/${r.id}/export`;$('cancel-run').classList.toggle('hidden',terminal(r.status));$('rerun').classList.toggle('hidden',!terminal(r.status));
-  const stages=[['recon','Explore'],['plan','Plan'],['coverage','Coverage'],['generate','Generate'],['validate','Validate'],['execute','Execute'],['heal','Triage / heal'],['report','Report']];
+  const stages=[['recon','Explore'],['plan','Planner'],['coverage','Coverage'],['generate','Generator'],['validate','Validate'],['execute','Execute'],['triage','Classifier'],['heal','Healer'],['report','Quality report']];
   const visited=new Set(r.events.map(e=>e.stage));
   $('pipeline').innerHTML=stages.map(([key,label],i)=>`<div class="pipeline-step ${r.stage===key?'current':visited.has(key)?'done':''}">${visited.has(key)&&r.stage!==key?'✓':`0${i+1}`} ${label}</div>`).join('');
   let runError=r.summary.error||'';
@@ -65,6 +66,7 @@ function renderDetail() {
   if(state.tab==='results') {
     const s=r.summary,u=s.usage;
     content=`<div class="summary-line"><span><strong>${r.results.length}</strong> recorded scenarios</span>${s.total!==undefined?`<span><strong>${s.pass_rate}%</strong> pass rate</span><span><strong>${s.duration_seconds}s</strong> duration</span>`:''}${u?`<span><strong>${u.calls}</strong> OpenAI calls</span><span><strong>${u.input_tokens+u.output_tokens}</strong> tokens</span><span>Cost: <strong>${u.estimated_cost_usd===null?'not configured':`$${u.estimated_cost_usd.toFixed(4)}`}</strong></span>`:''}</div>`;
+    if(r.evolution?.previous_run)content+=`<div class="gap-item">${r.evolution.reused.length} reused scenarios · ${r.evolution.added.length} additions · ${(r.evolution.outcomes||[]).filter(c=>c.change==='regression').length} regressions. See Changes & repairs.</div>`;
     content+=r.results.length?r.results.map(r=>resultHTML(r)+diagnosticHTML(r)).join(''):`<div class="detail-empty">${terminal(r.status)?'No execution results. Inspect the decision log and partial artifacts.':'Preparing browser evidence. Results appear as each scenario finishes.'}</div>`;
   } else if(state.tab==='plan') {
     content=r.plan?`<p class="muted">${esc(r.plan.summary)}</p>${r.plan.flows.map(f=>`<details class="result-item"><summary class="result-summary"><span class="result-name">${esc(f.name)}</span><span class="pill">${esc(f.category)}</span></summary><p>${esc(f.risk)} risk · ${esc(f.oracle)} oracle · Requirements: ${esc(f.requirement_ids.join(', ')||'none linked')}</p><ol class="flow-steps">${f.steps.map(s=>`<li><strong>${esc(s.action)}</strong> — ${esc(s.intent)}<pre class="code">${esc(s.target)}${s.value?` → ${esc(s.value)}`:''}</pre></li>`).join('')}</ol></details>`).join('')}`:'<div class="detail-empty">The planner has not produced a plan yet.</div>';
@@ -74,6 +76,8 @@ function renderDetail() {
     content=`<p class="muted">Passing tests do not prove full coverage. These gaps and requirement links describe the bounded scope of this run.</p>${r.gaps.map(g=>`<div class="gap-item">${esc(g)}</div>`).join('')}`;
     if(r.traceability.length) content+=`<h3>Requirements traceability</h3>${r.traceability.map(t=>`<div class="result-item"><strong>${esc(t.id)} — ${esc(t.text)}</strong><p>Planned: ${esc(t.flows.join(', ')||'none')} · Passing: ${esc(t.passing_flows.join(', ')||'none')}</p></div>`).join('')}`;
     if(r.heals.length) content+=`<h3>Repair audit</h3>${r.heals.map(h=>`<div class="result-item"><strong>${esc(h.flow_id)} · ${h.verified?'Verified':'Unverified'}</strong><p>${esc(h.rationale)}</p><pre class="code">${esc(h.old_selector)} → ${esc(h.new_selector||'no replacement')}</pre></div>`).join('')}`;
+  } else if(state.tab==='defects') {content=renderDefects(r);
+  } else if(state.tab==='evolution') {content=renderEvolution(r);
   } else {content=`<div class="artifact-grid">${r.artifacts.map(name=>`<a href="${artifactUrl(name)}" ${name.endsWith('.png')?'target="_blank" rel="noopener"':'download'}>↓ ${esc(name)}</a>`).join('')}</div>`;}
   $('detail-content').innerHTML=content;
   $('detail-content').querySelectorAll('details[data-flow]').forEach(d=>d.addEventListener('toggle',()=>{if(d.open)state.open.add(d.dataset.flow);else state.open.delete(d.dataset.flow);}));
@@ -110,21 +114,49 @@ document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.da
 document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>{
   state.nav=b.dataset.nav;document.querySelectorAll('[data-nav]').forEach(t=>t.classList.toggle('active',t===b));
   document.querySelectorAll('[data-nav]').forEach(t=>{if(t===b)t.setAttribute('aria-current','page');else t.removeAttribute('aria-current');});
-  $('page-title').textContent={overview:'Quality, at a glance.',runs:'Test runs',reports:'Reports',settings:'Configuration'}[state.nav];
+  $('page-title').textContent={overview:'Quality, at a glance.',runs:'Test runs',reports:'Test Quality Reports',settings:'Configuration'}[state.nav];
   $('page-description').textContent={overview:'Track test runs, review outcomes, and find what needs attention.',runs:'Browse your run history and inspect the evidence.',reports:'Review completed runs and export their evidence.',settings:''}[state.nav];
   $('runs-heading').textContent={overview:'Recent runs',runs:'All runs',reports:'Completed runs',settings:'Recent runs'}[state.nav];
   $('runs-description').textContent=state.nav==='overview'?'The latest six runs. Select a target to inspect its results.':'Select a target to view results, plans, and browser evidence.';
   document.querySelector('.metrics').classList.toggle('hidden',state.nav!=='overview');
-  $('breadcrumb').textContent={overview:'Overview',runs:'Test runs',reports:'Reports',settings:'Configuration'}[state.nav];
+  $('breadcrumb').textContent={overview:'Overview',runs:'Test runs',reports:'Test Quality Reports',settings:'Configuration'}[state.nav];
   $('overview-page').classList.toggle('hidden',state.nav==='settings');$('settings-page').classList.toggle('hidden',state.nav!=='settings');renderRuns();
 });
 $('run-form').onsubmit=async e=>{
   e.preventDefault();$('launch-run').disabled=true;showError('form-error','');
   try{
-    const run=await api('/runs',{method:'POST',body:JSON.stringify({url:$('target-url').value.trim(),mode:$('run-mode').value,scope:$('run-scope').value,requirements:$('run-requirements').value,max_pages:Number($('max-pages').value),max_flows:6,allow_interactions:$('allow-interactions').checked,resource_policy:$('resource-policy').value,navigation_origins:$('navigation-origins').value.split(',').map(x=>x.trim()).filter(Boolean)})});
+    const run=await api('/runs',{method:'POST',body:JSON.stringify({url:$('target-url').value.trim(),mode:$('run-mode').value,scope:$('run-scope').value,requirements:state.legacyRequirements,prd_name:state.prd?.name||'',prd_content:state.prd?.content||'',max_pages:Number($('max-pages').value),max_flows:Number($('max-flows').value),allow_interactions:$('allow-interactions').checked,resource_policy:$('resource-policy').value,navigation_origins:state.navigationOrigins})});
     $('run-dialog').close();toast('Run started. Follow each decision below.');await refresh();await selectRun(run.id);
   }catch(error){showError('form-error',error.message);}finally{$('launch-run').disabled=false;}
 };
 $('cancel-run').onclick=async()=>{try{await api(`/runs/${state.selected}/cancel`,{method:'POST'});await refresh();toast('Run cancelled. Partial evidence retained.');}catch(e){toast(e.message);}};
 $('rerun').onclick=()=>openRun(false,state.detail.request);
 (async()=>{try{state.config=await api('/config');renderConfig();await refresh();const active=state.runs.find(r=>!terminal(r.status));if(active)await selectRun(active.id,false);}catch(e){toast(e.message);}setInterval(refresh,2000);})();
+
+function renderPrd() {
+  $('prd-status').textContent=state.prd?`${state.prd.name} · ${new TextEncoder().encode(state.prd.content).length.toLocaleString()} bytes`:'No PRD selected';
+  $('clear-prd').classList.toggle('hidden',!state.prd);
+}
+$('prd-file').onchange=async()=>{
+  const file=$('prd-file').files[0];state.prd=null;renderPrd();
+  if(!file)return;
+  $('launch-run').disabled=true;
+  try{
+    if(!/\.(md|markdown)$/i.test(file.name)||file.size>65536)throw new Error('Choose a Markdown document up to 64 KiB.');
+    const content=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer());
+    if(!content.trim()||content.includes('\0'))throw new Error('The PRD must contain readable UTF-8 Markdown.');
+    state.prd={name:file.name,content};renderPrd();showError('form-error','');
+  }catch(e){$('prd-file').value='';showError('form-error',e.message);}
+  finally{$('launch-run').disabled=false;}
+};
+$('clear-prd').onclick=()=>{state.prd=null;$('prd-file').value='';renderPrd();};
+function renderDefects(r) {
+  const rows=r.defects||[];
+  if(!rows.length)return '<div class="detail-empty">The Defect Classifier report appears after execution. Older runs retain classifications in Results.</div>';
+  return `<p class="muted">Evidence-based triage distinguishes verified script repairs, suspected application defects, intermittent failures, and unresolved issues. Confidence is heuristic; suspected bugs need review.</p><a class="secondary" href="${artifactUrl('report.html')}" download>Download Test Quality Report</a>`+rows.map(d=>`<details class="result-item"><summary class="result-summary"><span class="result-name">${esc(d.name)}</span>${pill(d.classification.label||'needs_review')}</summary><p><strong>${esc(d.classification.issue_type)}</strong> · ${esc(d.risk)} risk · ${Math.round((d.classification.confidence||0)*100)}% heuristic confidence</p><p>${esc(d.classification.rationale)}</p><p><strong>Next action:</strong> ${esc(d.classification.next_action)}</p><p>PRD links: ${esc(d.requirement_ids.join(', ')||'No requirement linked')} · Oracle: ${esc(d.oracle)}</p><h3>Expected and actual</h3><pre class="code">${esc(d.expected?JSON.stringify(d.expected,null,2):'All configured assertions')}\n${esc(d.actual)}</pre><h3>Reproduction</h3><ol>${d.reproduction.map(s=>`<li>${esc(s.action)} · ${esc(s.intent)}<pre class="code">${esc(s.target)} ${esc(s.value)}</pre></li>`).join('')}</ol><h3>Attempts & evidence</h3>${d.attempts.map(a=>`<p>${esc(a.attempt)}: ${esc(a.status)} ${a.screenshot?`<a class="evidence-link" target="_blank" rel="noopener" href="${artifactUrl(a.screenshot)}">Screenshot ↗</a>`:''}</p>`).join('')}<h3>Healer decisions</h3>${d.repairs.length?d.repairs.map(h=>`<p>${esc(h.rationale)} · ${h.verified?'Verified':'Not verified'}</p><pre class="code">${esc(h.old_selector)} → ${esc(h.new_selector||'No safe replacement')}</pre>`).join(''):'<p>No locator repair applied.</p>'}</details>`).join('');
+}
+function renderEvolution(r) {
+  const e=r.evolution;
+  if(!e?.suite_key)return '<div class="detail-empty">Suite comparison becomes available during planning. Older runs can seed a new suite.</div>';
+  return `<p class="muted">${e.previous_run?`Compared with run ${esc(e.previous_run.slice(0,8))}`:'First matching run: establishing a reusable suite.'} · ${e.reused.length} retained · ${e.added.length} new scenarios</p><h3>Scenario outcomes</h3>${(e.outcomes||[]).map(c=>`<div class="result-item"><strong>${esc(c.name)}</strong><p>${esc(c.change.replaceAll('_',' '))} · ${esc(c.previous||'Not previously tested')} → ${esc(c.current)}</p></div>`).join('')||'<p>Execution is in progress.</p>'}<h3>Observed UI changes</h3><p class="muted">Text and locator differences within the crawl scope; not pixel comparison or proof of a defect.</p>${e.ui_changes.map(c=>`<details class="result-item"><summary class="result-summary"><span class="result-name">${esc(c.kind.replaceAll('_',' '))} · ${esc(c.url)}</span></summary><pre class="code">${esc(JSON.stringify(c,null,2))}</pre></details>`).join('')||'<p>No differences recorded in the observed scope.</p>'}${e.deferred.length?`<h3>Deferred by scenario budget</h3><p>${esc(e.deferred.join(', '))}</p>`:''}`;
+}

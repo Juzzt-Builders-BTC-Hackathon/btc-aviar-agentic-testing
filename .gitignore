@@ -6,3 +6,5 @@ data/
 *.log
 node_modules/
 test-results/
+pytest-cache-files-*/
+*.py[cod]

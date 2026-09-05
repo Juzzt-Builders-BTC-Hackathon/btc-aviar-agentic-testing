@@ -16,6 +16,7 @@ from .pipeline import run_pipeline
 from .safety import validate_url, redact
 from .store import Store
 from .runtime import preflight, error_details
+from .reporting import export_readme
 
 store = Store(config.DATA)
 tasks = {}
@@ -31,7 +32,7 @@ async def lifespan(app):
     if tasks: await asyncio.gather(*tasks.values(), return_exceptions=True)
 
 
-app = FastAPI(title="Aviar QA", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="AIVAR Autonomous Test Orchestration Agent", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 
 
@@ -44,8 +45,8 @@ async def local_session(request: Request, call_next):
             origin = request.headers.get("origin")
             if origin and origin not in {config.DEMO_ORIGIN, f"http://localhost:{config.PORT}"}:
                 return JSONResponse({"detail": "Cross-origin request denied"}, status_code=403)
-            if len(await request.body()) > 24000:
-                return JSONResponse({"detail": "Request exceeds 24 KB"}, status_code=413)
+            if len(await request.body()) > 450000:
+                return JSONResponse({"detail": "Request exceeds 450 KB"}, status_code=413)
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -81,7 +82,13 @@ async def settings():
 
 
 @app.get("/api/runs")
-async def runs(): return store.list()
+async def runs():
+    rows = store.list()
+    for row in rows:
+        # Documents belong in detail responses, not every two-second history poll.
+        row["request"].pop("prd_content", None)
+        row["request"].pop("requirements", None)
+    return rows
 
 
 def find_run(rid):
@@ -105,6 +112,8 @@ async def create_run(request: RunRequest):
     # Never persist configured secrets even if accidentally pasted into scope.
     request.scope = redact(request.scope)
     request.requirements = redact(request.requirements)
+    request.prd_content = redact(request.prd_content)
+    request.prd_name = redact(request.prd_name)
     try:
         rid = store.create(request.model_dump())
     except OSError as exc:
@@ -122,7 +131,8 @@ async def detail(rid: str):
     run.update(events=store.events(rid), plan=store.read(rid, "plan.json"),
         results=store.read(rid, "run_results.json", []), gaps=store.read(rid, "coverage_gaps.json", []),
         heals=store.read(rid, "heal_log.json", []), traceability=store.read(rid, "traceability.json", []),
-        validation=store.read(rid, "validation_report.json", []))
+        validation=store.read(rid, "validation_report.json", []),
+        defects=store.read(rid, "defect_report.json", []), evolution=store.read(rid, "suite_evolution.json", {}))
     run["artifacts"] = sorted(p.name for p in (store.root / rid).iterdir() if p.is_file() and not p.name.endswith(".tmp"))
     return run
 
@@ -149,13 +159,14 @@ async def artifact(rid: str, name: str):
 
 @app.get("/api/runs/{rid}/export")
 async def export(rid: str):
-    find_run(rid)
+    run = find_run(rid)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in (store.root / rid).iterdir():
             if path.is_file() and not path.name.endswith(".tmp"): archive.write(path, path.name)
         import json
         archive.writestr("decision_log.json", json.dumps(store.events(rid), indent=2))
+        archive.writestr("START_HERE.md", export_readme(run))
     return Response(buffer.getvalue(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="qa-run-{rid[:8]}.zip"'})
 
 
