@@ -7,13 +7,14 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import config
 from .models import RunRequest
 from .pipeline import run_pipeline
-from .safety import validate_url, redact
+from .safety import validate_url, redact, run_secrets
 from .store import Store
 from .runtime import preflight, error_details
 from .reporting import export_readme
@@ -34,6 +35,12 @@ async def lifespan(app):
 
 app = FastAPI(title="AIVAR Autonomous Test Orchestration Agent", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    # Pydantic's default error payload includes raw submitted values.
+    return JSONResponse({"detail": [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()]}, status_code=422)
 
 
 @app.middleware("http")
@@ -110,6 +117,8 @@ async def create_run(request: RunRequest):
     if any(not task.done() for task in tasks.values()):
         raise HTTPException(409, "A run is already active. Wait or cancel it first.")
     # Never persist configured secrets even if accidentally pasted into scope.
+    if request.authentication:
+        run_secrets.set((request.authentication.username.get_secret_value(), request.authentication.password.get_secret_value()))
     request.scope = redact(request.scope)
     request.requirements = redact(request.requirements)
     request.prd_content = redact(request.prd_content)
@@ -119,7 +128,7 @@ async def create_run(request: RunRequest):
     except OSError as exc:
         diagnostic = error_details(exc, "run_directory")
         raise HTTPException(503, f"{diagnostic['code']}: {diagnostic['message']} {diagnostic['remedy']}") from exc
-    task = asyncio.create_task(run_pipeline(store, rid))
+    task = asyncio.create_task(run_pipeline(store, rid, request.authentication))
     tasks[rid] = task
     task.add_done_callback(lambda done: tasks.pop(rid, None))
     return store.get(rid)

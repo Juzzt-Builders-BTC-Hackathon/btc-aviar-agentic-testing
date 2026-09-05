@@ -21,6 +21,7 @@ function openRun(demo=false, request=null) {
   $('max-pages').value=request?.max_pages || 5;$('allow-interactions').checked=request?.allow_interactions || false;
   $('resource-policy').value=request?.resource_policy || 'compatible';
   state.navigationOrigins=request?.navigation_origins||[];$('max-flows').value=request?.max_flows||6;
+  $('use-login').checked=false;updateLoginFields();clearLoginCredentials();
   $('advanced-options').open=false;
   showError('form-error','');$('run-dialog').showModal();
 }
@@ -90,7 +91,7 @@ function renderConfig() {
   const c=state.config;
   $('provider-status').textContent=c.openai_configured?`● OpenAI configured · ${c.model}`:'○ OpenAI key needed · Baseline is available';
   if(!c.runtime?.ready)$('provider-status').textContent='Browser not ready - inspect Configuration before starting a run.';
-  $('settings-content').innerHTML=`<div class="setting-row"><strong>OpenAI Responses API ${c.openai_configured?'· configured':'· needs a key'}</strong><p>Add OPENAI_API_KEY to .env, then restart the server. Keys stay on the backend.</p><code>OPENAI_MODEL=${esc(c.model)}</code></div><div class="setting-row"><strong>Allowed target origins</strong><p>${c.allow_all_origins?'Any HTTP(S) target is enabled.':'Only the configured target origins are enabled.'} Compatible loading supports external assets; navigation stays within the selected site and explicitly added origins.</p><pre class="code">${c.allow_all_origins?'QA_ALLOWED_ORIGINS=* - All target origins':esc(c.allowed_origins.join('\n'))}</pre></div><div class="setting-row"><strong>Authenticated sessions ${c.auth_configured?'· configured':'· not configured'}</strong><p>${esc(c.auth_origin||'Configure TARGET_AUTH_ORIGIN and a local login profile or storage-state file in .env.')}</p><p>Credentials and storage state are never sent to the planner. Run artifacts can contain application content; protect your data directory.</p></div><div class="setting-row"><strong>Execution limits</strong><p>One active run · 12 pages maximum · 12 scenarios maximum · 10-minute deadline · 5 OpenAI calls maximum (each may retry once).</p></div><div class="setting-row"><strong>Local operating boundary</strong><p>This is a single-user loopback application. SSO, distributed workers and remote hosting require the deployment work described in the implementation plan.</p></div>`;
+  $('settings-content').innerHTML=`<div class="setting-row"><strong>OpenAI Responses API ${c.openai_configured?'· configured':'· needs a key'}</strong><p>Add OPENAI_API_KEY to .env, then restart the server. Keys stay on the backend.</p><code>OPENAI_MODEL=${esc(c.model)}</code></div><div class="setting-row"><strong>Allowed target origins</strong><p>${c.allow_all_origins?'Any HTTP(S) target is enabled.':'Only the configured target origins are enabled.'} Compatible loading supports external assets; navigation stays within the selected site and explicitly added origins.</p><pre class="code">${c.allow_all_origins?'QA_ALLOWED_ORIGINS=* - All target origins':esc(c.allowed_origins.join('\n'))}</pre></div><div class="setting-row"><strong>Authenticated sessions ${c.auth_configured?'· configured':'· not configured'}</strong><p>${esc(c.auth_origin||'Enter per-run credentials in New test run ? Advanced details, or configure TARGET_AUTH_ORIGIN and a login profile or storage-state file in .env.')}</p><p>Credentials and storage state are never sent to the planner. Run artifacts can contain application content; protect your data directory.</p></div><div class="setting-row"><strong>Execution limits</strong><p>One active run · 12 pages maximum · 12 scenarios maximum · 10-minute deadline · 5 OpenAI calls maximum (each may retry once).</p></div><div class="setting-row"><strong>Local operating boundary</strong><p>This is a single-user loopback application. SSO, distributed workers and remote hosting require the deployment work described in the implementation plan.</p></div>`;
   $('settings-content').insertAdjacentHTML('afterbegin', `<div class="setting-row"><strong>Runtime readiness - ${c.runtime?.ready?'ready':'action required'}</strong><p>${esc((c.runtime?.checks||[]).join(' / '))}</p>${(c.runtime?.errors||[]).map(e=>`<p>${esc(e.code)} at ${esc(e.stage)}: ${esc(e.message)}</p><p>${esc(e.remedy)}</p>`).join('')}<p>Checked: ${esc(c.runtime?.checked_at||'not yet checked')}. Startup verifies write access and a real browser launch.</p></div>`);
 }
 async function refresh() {
@@ -108,6 +109,11 @@ async function refresh() {
 $('new-run').onclick=()=>openRun();$('empty-start').onclick=()=>openRun();$('try-demo').onclick=()=>openRun(true);
 $('view-all-runs').onclick=()=>document.querySelector('[data-nav="runs"]').click();
 $('run-form').addEventListener('invalid',e=>{if(e.target.closest('.advanced-options'))$('advanced-options').open=true;},true);
+function clearLoginCredentials() {$('login-username').value='';$('login-password').value='';}
+function updateLoginFields() {const enabled=$('use-login').checked;$('login-fields').classList.toggle('hidden',!enabled);$('login-fields').querySelectorAll('input').forEach(input=>{input.disabled=!enabled;input.required=enabled;});if(!enabled)clearLoginCredentials();}
+function loginDetails() {if(!$('use-login').checked)return null;return {username:$('login-username').value,password:$('login-password').value,login_path:$('login-path').value.trim(),username_selector:$('username-selector').value.trim(),password_selector:$('password-selector').value.trim(),submit_selector:$('submit-selector').value.trim(),success_selector:$('success-selector').value.trim()};}
+$('use-login').onchange=updateLoginFields;
+$('run-dialog').addEventListener('close',clearLoginCredentials);
 $('close-dialog').onclick=()=>$('run-dialog').close();$('run-search').oninput=renderRuns;
 $('run-list').onclick=e=>{const b=e.target.closest('[data-run]');if(b)selectRun(b.dataset.run).catch(e=>toast(e.message));};
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;document.querySelectorAll('[data-tab]').forEach(t=>{t.classList.toggle('active',t===b);t.setAttribute('aria-selected',t===b);});renderDetail();});
@@ -125,7 +131,7 @@ document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>{
 $('run-form').onsubmit=async e=>{
   e.preventDefault();$('launch-run').disabled=true;showError('form-error','');
   try{
-    const run=await api('/runs',{method:'POST',body:JSON.stringify({url:$('target-url').value.trim(),mode:$('run-mode').value,scope:$('run-scope').value,requirements:state.legacyRequirements,prd_name:state.prd?.name||'',prd_content:state.prd?.content||'',max_pages:Number($('max-pages').value),max_flows:Number($('max-flows').value),allow_interactions:$('allow-interactions').checked,resource_policy:$('resource-policy').value,navigation_origins:state.navigationOrigins})});
+    const run=await api('/runs',{method:'POST',body:JSON.stringify({url:$('target-url').value.trim(),mode:$('run-mode').value,scope:$('run-scope').value,requirements:state.legacyRequirements,prd_name:state.prd?.name||'',prd_content:state.prd?.content||'',max_pages:Number($('max-pages').value),max_flows:Number($('max-flows').value),allow_interactions:$('allow-interactions').checked,resource_policy:$('resource-policy').value,navigation_origins:state.navigationOrigins,authentication:loginDetails()})});
     $('run-dialog').close();toast('Run started. Follow each decision below.');await refresh();await selectRun(run.id);
   }catch(error){showError('form-error',error.message);}finally{$('launch-run').disabled=false;}
 };

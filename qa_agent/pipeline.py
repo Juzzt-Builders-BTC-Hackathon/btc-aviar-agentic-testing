@@ -26,7 +26,7 @@ def export_suite(store, rid, request, plan):
     store.artifact(rid, "generated_tests.py", '"""Replay from the project root: python path/to/generated_tests.py"""\nfrom pathlib import Path\nimport sys\nsys.path.insert(0, str(Path.cwd()))\nfrom qa_agent.replay import main\nif __name__ == "__main__":\n    main(Path(__file__).with_name("suite.json"))\n')
 
 
-async def run_pipeline(store, rid):
+async def run_pipeline(store, rid, authentication=None):
     request = RunRequest.model_validate(store.get(rid)["request"])
     llm = LLM()
     started = time.monotonic()
@@ -39,8 +39,9 @@ async def run_pipeline(store, rid):
             async with async_playwright() as pw:
                 browser = await launch_browser(pw)
                 try:
-                    state = await auth_state(browser, request.url)
-                    if state: event("recon", "Authenticated session established from local configuration.")
+                    state = await auth_state(browser, request.url, authentication)
+                    authentication = None
+                    if state: event("recon", "Authenticated session established.")
                     pages = await crawl(browser, request, state, lambda message: event("recon", message))
                     store.artifact(rid, "recon.json", pages)
                     requirements = requirements_list(request.requirements) + prd_requirements(request.prd_content)

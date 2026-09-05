@@ -1,12 +1,23 @@
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class LoginCredentials(StrictModel):
+    username: SecretStr = Field(min_length=1, max_length=1000)
+    password: SecretStr = Field(min_length=1, max_length=1000)
+    login_path: str = Field(default="/", min_length=1, max_length=2000)
+    username_selector: str = Field(default='[data-test="username"]', min_length=1, max_length=500)
+    password_selector: str = Field(default='[data-test="password"]', min_length=1, max_length=500)
+    submit_selector: str = Field(default='[data-test="login-button"]', min_length=1, max_length=500)
+    success_selector: str = Field(default='[data-test="inventory-container"]', min_length=1, max_length=500)
+
+
 class RunRequest(StrictModel):
+    authentication: LoginCredentials | None = Field(default=None, exclude=True, repr=False)
     url: str = Field(min_length=8, max_length=2000)
     scope: str = Field(default="", max_length=2000)
     requirements: str = Field(default="", max_length=12000)
@@ -22,6 +33,10 @@ class RunRequest(StrictModel):
     @model_validator(mode="after")
     def validate_navigation_origins(self):
         from .safety import origin
+        if self.authentication:
+            from urllib.parse import urljoin
+            if origin(urljoin(self.url, self.authentication.login_path)) != origin(self.url):
+                raise ValueError("Login URL must use the same origin as the application URL")
         if self.prd_content:
             if not self.prd_name.lower().endswith((".md", ".markdown")):
                 raise ValueError("PRD must be a Markdown (.md or .markdown) document")

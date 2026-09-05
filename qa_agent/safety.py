@@ -1,7 +1,11 @@
 import os
 import re
+from contextvars import ContextVar
 from urllib.parse import urljoin, urlsplit
 from . import config
+
+
+run_secrets = ContextVar("run_secrets", default=())
 
 
 class PolicyError(ValueError):
@@ -61,6 +65,8 @@ def request_block_reason(base, url, method, main_navigation, interactions, polic
 
 def redact(value):
     text = str(value)
+    for secret in run_secrets.get():
+        if secret: text = text.replace(secret, "[REDACTED]")
     for key in ("OPENAI_API_KEY", "TARGET_PASSWORD", "TARGET_USERNAME"):
         secret = os.getenv(key)
         if secret: text = text.replace(secret, "[REDACTED]")

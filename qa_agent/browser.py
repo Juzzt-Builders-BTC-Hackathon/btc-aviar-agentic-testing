@@ -76,21 +76,31 @@ async def new_context(browser, base, interactions=False, state=None, resource_po
     return context
 
 
-async def auth_state(browser, base):
+async def auth_state(browser, base, credentials=None):
     storage = os.getenv("QA_STORAGE_STATE", "")
     auth_origin = os.getenv("TARGET_AUTH_ORIGIN", "")
-    if auth_origin != origin(base): return None
-    if storage: return storage
-    if not os.getenv("TARGET_USERNAME") or not os.getenv("TARGET_PASSWORD"): return None
+    if credentials is None:
+        if auth_origin != origin(base): return None
+        if storage: return storage
+        if not os.getenv("TARGET_USERNAME") or not os.getenv("TARGET_PASSWORD"): return None
+    def setting(field, env, default):
+        return getattr(credentials, field) if credentials else os.getenv(env, default)
+    username = credentials.username.get_secret_value() if credentials else os.environ["TARGET_USERNAME"]
+    password = credentials.password.get_secret_value() if credentials else os.environ["TARGET_PASSWORD"]
     context = await new_context(browser, base, interactions=True)
     try:
         page = await context.new_page()
-        await page.goto(target_url(base, os.getenv("TARGET_LOGIN_PATH", "/")), wait_until="domcontentloaded")
-        await page.locator(os.getenv("TARGET_USERNAME_SELECTOR", '[data-test="username"]')).fill(os.environ["TARGET_USERNAME"])
-        await page.locator(os.getenv("TARGET_PASSWORD_SELECTOR", '[data-test="password"]')).fill(os.environ["TARGET_PASSWORD"])
-        await page.locator(os.getenv("TARGET_SUBMIT_SELECTOR", '[data-test="login-button"]')).click()
-        await expect(page.locator(os.getenv("TARGET_SUCCESS_SELECTOR", '[data-test="inventory-container"]'))).to_be_visible(timeout=15000)
+        login_url = target_url(base, setting("login_path", "TARGET_LOGIN_PATH", "/"))
+        if origin(login_url) != origin(base): raise PolicyError("Login URL must use the application origin")
+        await page.goto(login_url, wait_until="domcontentloaded")
+        if origin(page.url) != origin(base): raise PolicyError("Login redirected outside the application origin")
+        await page.locator(setting("username_selector", "TARGET_USERNAME_SELECTOR", '[data-test="username"]')).fill(username)
+        await page.locator(setting("password_selector", "TARGET_PASSWORD_SELECTOR", '[data-test="password"]')).fill(password)
+        await page.locator(setting("submit_selector", "TARGET_SUBMIT_SELECTOR", '[data-test="login-button"]')).click()
+        await expect(page.locator(setting("success_selector", "TARGET_SUCCESS_SELECTOR", '[data-test="inventory-container"]'))).to_be_visible(timeout=15000)
         return await context.storage_state()
+    except Exception:
+        raise ValueError("Website login failed. Check credentials, login selectors, and the signed-in success element. SSO, MFA and CAPTCHA need a pre-authenticated storage state.") from None
     finally: await context.close()
 
 
